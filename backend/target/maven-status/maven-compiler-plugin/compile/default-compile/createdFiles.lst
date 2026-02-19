@@ -1,0 +1,13 @@
+com\ai\teachingassistant\client\LlmClient.class
+com\ai\teachingassistant\dto\LectureRequest$LectureRequestBuilder.class
+com\ai\teachingassistant\dto\LectureRequest.class
+com\ai\teachingassistant\service\LectureService.class
+com\ai\teachingassistant\service\PdfExtractionService.class
+com\ai\teachingassistant\controller\LectureController.class
+com\ai\teachingassistant\dto\SummaryResponse.class
+com\ai\teachingassistant\exception\GlobalExceptionHandler.class
+com\ai\teachingassistant\TeachingAssistantApplication.class
+com\ai\teachingassistant\dto\SummaryResponse$SummaryResponseBuilder.class
+com\ai\teachingassistant\model\Lecture.class
+com\ai\teachingassistant\model\Lecture$LectureBuilder.class
+com\ai\teachingassistant\service\SummarizationService.class

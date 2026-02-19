@@ -1,0 +1,85 @@
+# ════════════════════════════════════════════════════════════════
+#  AI Teaching Assistant — Combined .gitignore
+#  Covers: Root / Backend (Spring Boot + Maven) / Frontend (React + Vite)
+# ════════════════════════════════════════════════════════════════
+
+
+# ── OS & System ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+
+# ── IDE & Editors ────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+*.suo
+*.sw?
+.classpath
+.project
+.settings/
+.factorypath
+bin/
+
+
+# ── Environment / Secrets ────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.local
+
+# Backend secret property files (never commit API keys)
+backend/src/main/resources/application-local.properties
+backend/src/main/resources/application-secret.properties
+backend/src/main/resources/application-prod.properties
+
+
+# ── Backend: Maven ───────────────────────────────────────────────
+backend/target/
+backend/.mvn/
+backend/mvnw
+backend/mvnw.cmd
+
+
+# ── Backend: Java / Spring Boot ──────────────────────────────────
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+hs_err_pid*
+replay_pid*
+spring-shell.log
+backend/logs/
+*.log
+*.log.*
+
+
+# ── Frontend: Node / npm ─────────────────────────────────────────
+frontend/node_modules/
+frontend/.pnp
+frontend/.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# ── Frontend: Build Output ───────────────────────────────────────
+frontend/dist/
+frontend/dist-ssr/
+frontend/build/
+
+
+# ── Frontend: Vite & Cache ───────────────────────────────────────
+frontend/.vite/
+frontend/.eslintcache
+frontend/.stylelintcache
+frontend/*.tsbuildinfo
+
+
+# ── Frontend: Testing ────────────────────────────────────────────
+frontend/coverage/
