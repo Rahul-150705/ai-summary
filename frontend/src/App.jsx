@@ -1,94 +1,113 @@
-import { useState, useEffect } from 'react';
-import UploadLecture from './components/UploadLecture.jsx';
-import SummaryView   from './components/SummaryView.jsx';
-import { checkHealth } from './services/api.js';
+import { useState }     from 'react';
+import { useAuth }      from './context/AuthContext';
+import LoginPage        from './pages/LoginPage';
+import SignupPage       from './pages/SignupPage';
+import UploadLecture    from './components/UploadLecture.jsx';
+import SummaryView      from './components/SummaryView.jsx';
+import { checkHealth }  from './services/api.js';
+import { useEffect }    from 'react';
 
 /**
- * App — Root component managing global state.
+ * App — Root component.
  *
- * States:
- *  - 'idle'    → Show upload form
- *  - 'loading' → Show spinner while backend processes PDF
- *  - 'done'    → Show SummaryView with results
+ * Auth states:  'login' | 'signup'
+ * App states:   'idle'  | 'loading' | 'done'
  */
 function App() {
-  const [appState, setAppState]   = useState('idle');   // 'idle' | 'loading' | 'done'
-  const [summary,  setSummary]    = useState(null);
-  const [provider, setProvider]   = useState(null);
+  const { isAuthenticated, isLoading, user, logout, accessToken } = useAuth();
 
-  // Fetch the active LLM provider from the health endpoint on mount
+  const [authView,  setAuthView]  = useState('login');   // 'login' | 'signup'
+  const [appState,  setAppState]  = useState('idle');     // 'idle' | 'loading' | 'done'
+  const [summary,   setSummary]   = useState(null);
+  const [provider,  setProvider]  = useState(null);
+
   useEffect(() => {
-    checkHealth()
-      .then((data) => setProvider(data.provider))
-      .catch(() => setProvider('openai')); // fallback silently
-  }, []);
+    if (isAuthenticated) {
+      checkHealth()
+        .then(d => setProvider(d.provider))
+        .catch(() => setProvider('openai'));
+    }
+  }, [isAuthenticated]);
 
-  const handleLoading = (isLoading) => {
-    setAppState(isLoading ? 'loading' : 'idle');
-  };
+  const handleLoading      = (v) => setAppState(v ? 'loading' : 'idle');
+  const handleSummaryReady = (d) => { setSummary(d); setAppState('done'); };
+  const handleReset        = ()  => { setSummary(null); setAppState('idle'); };
 
-  const handleSummaryReady = (data) => {
-    setSummary(data);
-    setAppState('done');
-  };
+  const providerLabel = (p) =>
+    ({ openai: 'OpenAI GPT-4', claude: 'Anthropic Claude', gemini: 'Google Gemini' })[p?.toLowerCase()] || p;
 
-  const handleReset = () => {
-    setSummary(null);
-    setAppState('idle');
-  };
+  // ── 1. Initial hydration spinner ─────────────────────────────────────────
+  if (isLoading) {
+    return (
+      <div className="hydration-screen">
+        <div className="spinner large-spinner" />
+        <p>Loading…</p>
+      </div>
+    );
+  }
 
-  const providerLabel = (p) => {
-    if (!p) return '';
-    return { openai: 'OpenAI GPT-4', claude: 'Anthropic Claude', gemini: 'Google Gemini' }[p.toLowerCase()]
-      || p;
-  };
+  // ── 2. Not authenticated → show login or signup ──────────────────────────
+  if (!isAuthenticated) {
+    return authView === 'login'
+      ? <LoginPage  onNavigateSignup={() => setAuthView('signup')} />
+      : <SignupPage onNavigateLogin={()  => setAuthView('login')}  />;
+  }
 
+  // ── 3. Authenticated → main app ──────────────────────────────────────────
   return (
-    <>
-      <div className="container">
-        <div className="card">
+    <div className="container">
+      <div className="card">
 
-          {/* ── Header ─────────────────────────────────── */}
-          <header className="app-header">
-            <h1>🎓 AI Teaching Assistant</h1>
-            <p>Upload your lecture PDF and get an AI-powered structured summary instantly</p>
-            {provider && (
-              <div className="provider-badge">
-                🤖 Powered by {providerLabel(provider)}
-              </div>
-            )}
-          </header>
-
-          {/* ── Body: Upload → Loading → Summary ───────── */}
-          {appState === 'idle' && (
-            <UploadLecture
-              onSummaryReady={handleSummaryReady}
-              onLoading={handleLoading}
-            />
-          )}
-
-          {appState === 'loading' && (
-            <div className="loading-section">
-              <div className="spinner" />
-              <h3>Generating your summary…</h3>
-              <p>Our AI is reading your lecture and extracting key insights</p>
-              <div className="progress-dots">
-                <span /><span /><span />
-              </div>
+        {/* Header */}
+        <header className="app-header">
+          <div className="header-top-row">
+            <div className="header-user-info">
+              <span className="user-avatar">{user?.fullName?.[0]?.toUpperCase() || '?'}</span>
+              <span className="user-name">{user?.fullName}</span>
+            </div>
+            <button className="logout-btn" onClick={logout}>
+              Sign out
+            </button>
+          </div>
+          <h1>🎓 AI Teaching Assistant</h1>
+          <p>Upload your lecture PDF and get an AI-powered structured summary instantly</p>
+          {provider && (
+            <div className="provider-badge">
+              🤖 Powered by {providerLabel(provider)}
             </div>
           )}
+        </header>
 
-          {appState === 'done' && summary && (
-            <SummaryView summary={summary} onReset={handleReset} />
-          )}
+        {/* Body */}
+        {appState === 'idle' && (
+          <UploadLecture
+            onSummaryReady={handleSummaryReady}
+            onLoading={handleLoading}
+            accessToken={accessToken}
+          />
+        )}
 
-        </div>
+        {appState === 'loading' && (
+          <div className="loading-section">
+            <div className="spinner" />
+            <h3>Generating your summary…</h3>
+            <p>Our AI is reading your lecture and extracting key insights</p>
+            <div className="progress-dots">
+              <span /><span /><span />
+            </div>
+          </div>
+        )}
 
-        <footer className="app-footer">
-          AI Teaching Assistant v1.0 · Spring Boot + React · {new Date().getFullYear()}
-        </footer>
+        {appState === 'done' && summary && (
+          <SummaryView summary={summary} onReset={handleReset} />
+        )}
+
       </div>
-    </>
+
+      <footer className="app-footer">
+        AI Teaching Assistant v1.0 · Spring Boot + React · {new Date().getFullYear()}
+      </footer>
+    </div>
   );
 }
 
