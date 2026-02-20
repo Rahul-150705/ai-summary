@@ -48,7 +48,12 @@ public class LlmClient {
     private String geminiApiKey;
     @Value("${gemini.api.url:https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent}")
     private String geminiApiUrl;
+    // Ollama (local - free, no API key needed)
+    @Value("${ollama.api.url:http://localhost:11434/api/generate}")
+    private String ollamaApiUrl;
 
+    @Value("${ollama.model:llama3.2}")
+    private String ollamaModel;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(30))
@@ -66,6 +71,7 @@ public class LlmClient {
         return switch (provider.toLowerCase()) {
             case "claude"  -> callClaude(prompt);
             case "gemini"  -> callGemini(prompt);
+            case "ollama"  -> callOllama(prompt);
             default        -> callOpenAi(prompt);
         };
     }
@@ -185,4 +191,30 @@ public class LlmClient {
         JsonNode root = objectMapper.readTree(response.body());
         return root.at("/candidates/0/content/parts/0/text").asText();
     }
+    // ─────────────────────────────────────────────────────────────────────────────
+// Ollama (Local - Free)
+// ─────────────────────────────────────────────────────────────────────────────
+private String callOllama(String prompt) throws IOException, InterruptedException {
+    ObjectNode body = objectMapper.createObjectNode();
+    body.put("model", ollamaModel);
+    body.put("prompt", prompt);
+    body.put("stream", false);  // get full response at once
+
+    HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(ollamaApiUrl))
+            .header("Content-Type", "application/json")
+            .timeout(Duration.ofSeconds(120))  // local models can be slow
+            .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+            .build();
+
+    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    log.debug("Ollama response status: {}", response.statusCode());
+
+    if (response.statusCode() != 200) {
+        throw new IOException("Ollama API error [" + response.statusCode() + "]: " + response.body());
+    }
+
+    JsonNode root = objectMapper.readTree(response.body());
+    return root.at("/response").asText();
+}
 }
