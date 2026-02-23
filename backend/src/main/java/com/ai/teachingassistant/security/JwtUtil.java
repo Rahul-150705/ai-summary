@@ -12,14 +12,15 @@ import javax.crypto.SecretKey;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Function;
 
 /**
  * JwtUtil handles all JWT operations:
- *  - Generating access tokens (short-lived, 15 min)
- *  - Generating refresh tokens (long-lived, 7 days)
- *  - Validating tokens
- *  - Extracting claims (email, expiry, token type)
+ * - Generating access tokens (short-lived, 15 min)
+ * - Generating refresh tokens (long-lived, 7 days)
+ * - Validating tokens
+ * - Extracting claims (email, expiry, token type)
  */
 @Slf4j
 @Component
@@ -29,14 +30,14 @@ public class JwtUtil {
     private String secretKey;
 
     @Value("${jwt.access-token.expiration:900000}")
-    private long accessTokenExpiration;           // 15 minutes default
+    private long accessTokenExpiration; // 15 minutes default
 
     @Value("${jwt.refresh-token.expiration:604800000}")
-    private long refreshTokenExpiration;          // 7 days default
+    private long refreshTokenExpiration; // 7 days default
 
     private static final String TOKEN_TYPE_CLAIM = "tokenType";
-    private static final String ACCESS_TOKEN     = "access";
-    private static final String REFRESH_TOKEN    = "refresh";
+    private static final String ACCESS_TOKEN = "access";
+    private static final String REFRESH_TOKEN = "refresh";
 
     // ─────────────────────────────────────────────────────────────────────────
     // Token Generation
@@ -65,6 +66,7 @@ public class JwtUtil {
         return Jwts.builder()
                 .claims(extraClaims)
                 .subject(subject)
+                .id(UUID.randomUUID().toString()) // unique jti per token
                 .issuedAt(new Date(System.currentTimeMillis()))
                 .expiration(new Date(System.currentTimeMillis() + expiration))
                 .signWith(getSigningKey())
@@ -125,8 +127,18 @@ public class JwtUtil {
         return extractClaim(token, Claims::getExpiration);
     }
 
-    public long getAccessTokenExpiration()  { return accessTokenExpiration; }
-    public long getRefreshTokenExpiration() { return refreshTokenExpiration; }
+    public long getAccessTokenExpiration() {
+        return accessTokenExpiration;
+    }
+
+    public long getRefreshTokenExpiration() {
+        return refreshTokenExpiration;
+    }
+
+    /** Extracts the unique jti (JWT ID) claim — used for blacklisting. */
+    public String extractTokenId(String token) {
+        return extractClaim(token, Claims::getId);
+    }
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
         final Claims claims = extractAllClaims(token);

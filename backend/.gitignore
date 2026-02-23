@@ -1,0 +1,27 @@
+# ── Build output ──────────────────────────────────────────────────────────
+target/
+*.jar
+*.war
+*.class
+
+# ── Database backups — can be large, keep them local only ────────────────
+backups/
+
+
+# ── Secrets — NEVER commit these ─────────────────────────────────────────
+.env
+*.env
+*.key
+
+# ── IDE ───────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+*.code-workspace
+
+# ── OS ────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Maven ─────────────────────────────────────────────────────────────────
+.mvn/timing.properties

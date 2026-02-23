@@ -1,0 +1,105 @@
+# Database Integration — Walkthrough
+
+The backend is now connected to **PostgreSQL** via **Spring Data JPA**. Data is persisted across server restarts.
+
+---
+
+## What Changed
+
+### [pom.xml](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/pom.xml)
+Added two dependencies:
+- `spring-boot-starter-data-jpa` — Hibernate ORM + JPA support
+- `postgresql` — JDBC driver (runtime scope)
+
+### [model/User.java](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/model/User.java)
+- Added `@Entity`, `@Table(name="users")` — maps to `users` DB table
+- Added `@Id @GeneratedValue(strategy = IDENTITY)` on `id` (now `Long`, auto-incremented by DB)
+- Added `@Column` constraints and `@PrePersist` to auto-set `createdAt`
+
+### [model/Lecture.java](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/model/Lecture.java)
+- Added `@Entity`, `@Table(name="lectures")`
+- New **`summary`** column (`TEXT`) — stores the AI-generated summary as JSON
+- New **`userId`** column — links a lecture to the user who uploaded it
+
+### [auth/UserRepository.java](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/auth/UserRepository.java)
+Replaced the in-memory `ConcurrentHashMap` class with a proper JPA interface — **zero downstream changes** needed:
+```java
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByEmail(String email);
+    boolean existsByEmail(String email);
+}
+```
+
+### [repository/LectureRepository.java](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/repository/LectureRepository.java) *(new file)*
+```java
+public interface LectureRepository extends JpaRepository<Lecture, String> {
+    List<Lecture> findByUserIdOrderByProcessedAtDesc(String userId);
+}
+```
+
+### [service/LectureService.java](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/service/LectureService.java)
+- Injected [LectureRepository](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/repository/LectureRepository.java#13-21) and `ObjectMapper`
+- After generating AI summary → serializes it to JSON → saves [Lecture](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/model/Lecture.java#15-51) to DB
+- New [getLecturesByUser(String userId)](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/service/LectureService.java#97-103) method for history retrieval
+- Backward-compatible overload [processLecture(file)](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/service/LectureService.java#89-96) still works
+
+### [controller/LectureController.java](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/controller/LectureController.java)
+- Extracts authenticated user's email via `java.security.Principal`
+- Passes it to [processLecture(file, userId)](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/java/com/ai/teachingassistant/service/LectureService.java#89-96) so each lecture is linked to its owner
+
+### [application.properties](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/src/main/resources/application.properties)
+```properties
+spring.datasource.url=${DB_URL:jdbc:postgresql://localhost:5432/teaching_assistant}
+spring.datasource.username=${DB_USERNAME:postgres}
+spring.datasource.password=${DB_PASSWORD:postgres}
+spring.datasource.driver-class-name=org.postgresql.Driver
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+```
+
+### [.env](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/.env)
+```
+DB_URL=jdbc:postgresql://localhost:5432/teaching_assistant
+DB_USERNAME=postgres
+DB_PASSWORD=your_db_password_here
+```
+
+---
+
+## Build Verification
+
+✅ `mvn compile` completed successfully with **zero errors**.
+
+---
+
+## How to Run
+
+> [!IMPORTANT]
+> Make sure PostgreSQL is running and a database named `teaching_assistant` exists before starting the app.
+
+**1. Create the database (once):**
+```sql
+CREATE DATABASE teaching_assistant;
+```
+
+**2. Update [.env](file:///c:/Users/Rahul.VASUNDRA/Desktop/ai-summary/teaching-assistant/backend/.env)** with your actual PostgreSQL password:
+```
+DB_PASSWORD=your_real_password
+```
+
+**3. Start the backend:**
+```bash
+mvn spring-boot:run
+```
+On first startup, Hibernate will automatically create the `users` and `lectures` tables (`ddl-auto=update`).
+
+---
+
+## What to Test
+
+| Action | How | Expected |
+|---|---|---|
+| Register a user | `POST /api/auth/signup` | Row in `users` table — survives restart |
+| Login after restart | `POST /api/auth/login` | JWT returned (data persisted) |
+| Upload a PDF | `POST /api/lecture/summarize` | Row in `lectures` with summary JSON |
+| Check tables | `SELECT * FROM users;` in psql | All registered users visible |

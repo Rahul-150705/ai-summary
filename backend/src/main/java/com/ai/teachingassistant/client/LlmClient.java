@@ -16,9 +16,11 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 
 /**
- * LlmClient acts as a pluggable AI provider interface using the Strategy pattern.
+ * LlmClient acts as a pluggable AI provider interface using the Strategy
+ * pattern.
  * Supports OpenAI GPT-4, Anthropic Claude, and Google Gemini.
- * Provider is selected at runtime via the 'llm.provider' configuration property.
+ * Provider is selected at runtime via the 'llm.provider' configuration
+ * property.
  */
 @Slf4j
 @Component
@@ -56,11 +58,12 @@ public class LlmClient {
     private String ollamaModel;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(30))
+            .connectTimeout(Duration.ofSeconds(60))
             .build();
 
     /**
-     * Send a prompt to the configured LLM provider and return the raw text response.
+     * Send a prompt to the configured LLM provider and return the raw text
+     * response.
      *
      * @param prompt The constructed prompt string.
      * @return AI-generated text response.
@@ -69,10 +72,10 @@ public class LlmClient {
     public String sendPrompt(String prompt) throws IOException, InterruptedException {
         log.info("Sending prompt to LLM provider: {}", provider);
         return switch (provider.toLowerCase()) {
-            case "claude"  -> callClaude(prompt);
-            case "gemini"  -> callGemini(prompt);
-            case "ollama"  -> callOllama(prompt);
-            default        -> callOpenAi(prompt);
+            case "claude" -> callClaude(prompt);
+            case "gemini" -> callGemini(prompt);
+            case "ollama" -> callOllama(prompt);
+            default -> callOpenAi(prompt);
         };
     }
 
@@ -89,12 +92,13 @@ public class LlmClient {
     private String callOpenAi(String prompt) throws IOException, InterruptedException {
         ObjectNode body = objectMapper.createObjectNode();
         body.put("model", openAiModel);
-        body.put("max_tokens", 2000);
+        body.put("max_tokens", 3000);
 
         ArrayNode messages = objectMapper.createArrayNode();
         ObjectNode systemMsg = objectMapper.createObjectNode();
         systemMsg.put("role", "system");
-        systemMsg.put("content", "You are an expert educational assistant that summarizes lecture content clearly and concisely.");
+        systemMsg.put("content",
+                "You are an expert educational assistant that summarizes lecture content clearly and concisely.");
         messages.add(systemMsg);
 
         ObjectNode userMsg = objectMapper.createObjectNode();
@@ -128,7 +132,7 @@ public class LlmClient {
     private String callClaude(String prompt) throws IOException, InterruptedException {
         ObjectNode body = objectMapper.createObjectNode();
         body.put("model", claudeModel);
-        body.put("max_tokens", 2000);
+        body.put("max_tokens", 3000);
 
         ArrayNode messages = objectMapper.createArrayNode();
         ObjectNode userMsg = objectMapper.createObjectNode();
@@ -191,30 +195,32 @@ public class LlmClient {
         JsonNode root = objectMapper.readTree(response.body());
         return root.at("/candidates/0/content/parts/0/text").asText();
     }
+
     // ─────────────────────────────────────────────────────────────────────────────
-// Ollama (Local - Free)
-// ─────────────────────────────────────────────────────────────────────────────
-private String callOllama(String prompt) throws IOException, InterruptedException {
-    ObjectNode body = objectMapper.createObjectNode();
-    body.put("model", ollamaModel);
-    body.put("prompt", prompt);
-    body.put("stream", false);  // get full response at once
+    // Ollama (Local - Free)
+    // ─────────────────────────────────────────────────────────────────────────────
+    private String callOllama(String prompt) throws IOException, InterruptedException {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("model", ollamaModel);
+        body.put("prompt", prompt);
+        body.put("stream", false); // get full response at once
+        body.put("num_predict", 3000); // cap output tokens so it doesn't run forever
 
-    HttpRequest request = HttpRequest.newBuilder()
-            .uri(URI.create(ollamaApiUrl))
-            .header("Content-Type", "application/json")
-            .timeout(Duration.ofSeconds(120))  // local models can be slow
-            .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
-            .build();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(ollamaApiUrl))
+                .header("Content-Type", "application/json")
+                .timeout(Duration.ofSeconds(300)) // 5 min — local models are slow for long output
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                .build();
 
-    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    log.debug("Ollama response status: {}", response.statusCode());
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        log.debug("Ollama response status: {}", response.statusCode());
 
-    if (response.statusCode() != 200) {
-        throw new IOException("Ollama API error [" + response.statusCode() + "]: " + response.body());
+        if (response.statusCode() != 200) {
+            throw new IOException("Ollama API error [" + response.statusCode() + "]: " + response.body());
+        }
+
+        JsonNode root = objectMapper.readTree(response.body());
+        return root.at("/response").asText();
     }
-
-    JsonNode root = objectMapper.readTree(response.body());
-    return root.at("/response").asText();
-}
 }

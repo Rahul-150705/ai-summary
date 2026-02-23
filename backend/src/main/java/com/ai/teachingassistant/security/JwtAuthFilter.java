@@ -19,26 +19,25 @@ import java.io.IOException;
 
 /**
  * JwtAuthFilter intercepts every HTTP request exactly once.
- * - Extracts the JWT from the Authorization: Bearer <token> header
- * - Validates the token using JwtUtil
+ * - Extracts the JWT from Authorization: Bearer <token>
+ * - Rejects tokens that have been blacklisted (logout)
+ * - Validates the token signature and type
  * - Sets the authenticated user into Spring Security's SecurityContext
- * - If no token or invalid token → request proceeds unauthenticated
- *   (SecurityConfig will block protected endpoints)
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class JwtAuthFilter extends OncePerRequestFilter {
 
-    private final JwtUtil            jwtUtil;
+    private final JwtUtil jwtUtil;
     private final UserDetailsService userDetailsService;
+    private final TokenBlacklistService tokenBlacklistService;
 
     @Override
     protected void doFilterInternal(
-            @NonNull HttpServletRequest  request,
+            @NonNull HttpServletRequest request,
             @NonNull HttpServletResponse response,
-            @NonNull FilterChain         filterChain
-    ) throws ServletException, IOException {
+            @NonNull FilterChain filterChain) throws ServletException, IOException {
 
         final String authHeader = request.getHeader("Authorization");
 
@@ -48,7 +47,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        final String jwt   = authHeader.substring(7);  // strip "Bearer "
+        final String jwt = authHeader.substring(7); // strip "Bearer "
         final String email;
 
         try {
@@ -59,17 +58,22 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
+        // Reject blacklisted tokens (logged-out sessions)
+        if (tokenBlacklistService.isBlacklisted(jwt)) {
+            log.warn("Rejected blacklisted token for user: {}", email);
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         // Only authenticate if not already authenticated in this request
         if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             UserDetails userDetails = userDetailsService.loadUserByUsername(email);
 
             if (jwtUtil.isTokenValid(jwt, userDetails) && jwtUtil.isAccessToken(jwt)) {
-                UsernamePasswordAuthenticationToken authToken =
-                        new UsernamePasswordAuthenticationToken(
-                                userDetails,
-                                null,
-                                userDetails.getAuthorities()
-                        );
+                UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
+                        userDetails,
+                        null,
+                        userDetails.getAuthorities());
                 authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(authToken);
                 log.debug("Authenticated user: {}", email);

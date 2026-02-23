@@ -26,33 +26,31 @@ import java.util.List;
  *
  * PasswordEncoder is injected from PasswordEncoderConfig (separate class)
  * to break the circular dependency:
- *   SecurityConfig → UserService → PasswordEncoder → SecurityConfig
+ * SecurityConfig → UserService → PasswordEncoder → SecurityConfig
  */
 @Configuration
 @EnableWebSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
 
-    private final JwtAuthFilter  jwtAuthFilter;
-    private final UserService    userService;
-    private final PasswordEncoder passwordEncoder;   // ← injected from PasswordEncoderConfig
+    private final JwtAuthFilter jwtAuthFilter;
+    private final UserService userService;
+    private final PasswordEncoder passwordEncoder; // ← injected from PasswordEncoderConfig
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-            .csrf(AbstractHttpConfigurer::disable)
-            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**").permitAll()
-                .requestMatchers("/api/lecture/health").permitAll()
-                .requestMatchers("/api/lecture/**").authenticated()
-                .anyRequest().authenticated()
-            )
-            .sessionManagement(session ->
-                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-            )
-            .authenticationProvider(authenticationProvider())
-            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                .csrf(AbstractHttpConfigurer::disable)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/api/lecture/health").permitAll()
+                        .requestMatchers("/api/lecture/**").authenticated()
+                        .requestMatchers("/api/quiz/**").authenticated()
+                        .anyRequest().authenticated())
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authenticationProvider(authenticationProvider())
+                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
@@ -76,8 +74,7 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(List.of(
                 "http://localhost:5173",
-                "http://localhost:3000"
-        ));
+                "http://localhost:3000"));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);

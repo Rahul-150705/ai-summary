@@ -10,7 +10,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 /**
  * UserService implements Spring Security's UserDetailsService so the
@@ -22,7 +21,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class UserService implements UserDetailsService {
 
-    private final UserRepository  userRepository;
+    private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
     /**
@@ -40,8 +39,8 @@ public class UserService implements UserDetailsService {
     /**
      * Registers a new user. Validates email uniqueness and hashes password.
      *
-     * @param fullName Display name
-     * @param email    Unique email (used as login username)
+     * @param fullName    Display name
+     * @param email       Unique email (used as login username)
      * @param rawPassword Plain text password (will be BCrypt hashed)
      * @return The saved User entity
      * @throws IllegalArgumentException if email is already registered
@@ -52,7 +51,6 @@ public class UserService implements UserDetailsService {
         }
 
         User user = User.builder()
-                .id(UUID.randomUUID().toString())
                 .fullName(fullName)
                 .email(email.toLowerCase())
                 .password(passwordEncoder.encode(rawPassword))

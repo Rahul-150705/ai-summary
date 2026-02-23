@@ -1,5 +1,6 @@
 package com.ai.teachingassistant.model;
 
+import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -13,21 +14,42 @@ import java.util.Collection;
 import java.util.List;
 
 /**
- * User model implementing Spring Security's UserDetails interface.
- * Used for authentication and authorization across the application.
+ * User entity implementing Spring Security's UserDetails interface.
+ * Persisted to the `users` table via Spring Data JPA.
  */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@Entity
+@Table(name = "users", uniqueConstraints = @UniqueConstraint(columnNames = "email"))
 public class User implements UserDetails {
 
-    private String id;
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false)
     private String fullName;
+
+    @Column(nullable = false, unique = true)
     private String email;
-    private String password;          // BCrypt-hashed
-    private String role;              // e.g. "ROLE_USER", "ROLE_ADMIN"
+
+    @Column(nullable = false)
+    private String password; // BCrypt-hashed
+
+    @Column(nullable = false)
+    private String role; // e.g. "ROLE_USER", "ROLE_ADMIN"
+
+    @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+    }
 
     // ── UserDetails contract ───────────────────────────────────────────────
 
@@ -38,15 +60,26 @@ public class User implements UserDetails {
 
     @Override
     public String getUsername() {
-        return email;                 // email is the unique identifier
+        return email; // email is the unique identifier
     }
 
     @Override
-    public boolean isAccountNonExpired()  { return true; }
+    public boolean isAccountNonExpired() {
+        return true;
+    }
+
     @Override
-    public boolean isAccountNonLocked()   { return true; }
+    public boolean isAccountNonLocked() {
+        return true;
+    }
+
     @Override
-    public boolean isCredentialsNonExpired() { return true; }
+    public boolean isCredentialsNonExpired() {
+        return true;
+    }
+
     @Override
-    public boolean isEnabled()            { return true; }
+    public boolean isEnabled() {
+        return true;
+    }
 }
