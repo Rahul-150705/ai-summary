@@ -129,6 +129,25 @@ public class LectureController {
         return ResponseEntity.noContent().build();
     }
 
+    // ── POST /api/lecture/{id}/reindex ────────────────────────────────────
+
+    /**
+     * Re-indexes a lecture's text into the pgvector RAG store.
+     * Call this when Q&A returns "couldn't find relevant content" for a lecture
+     * that was uploaded before the embedding model was available.
+     */
+    @PostMapping("/{id}/reindex")
+    public ResponseEntity<Map<String, String>> reindexLecture(
+            @PathVariable String id,
+            Principal principal) {
+        String userId = principal.getName();
+        log.info("Re-index request for lecture id={} by user={}", id, userId);
+        lectureService.reindexLecture(id, userId);
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Lecture re-indexed successfully. Q&A is now available."));
+    }
+
     // ── GET /api/lecture/health ───────────────────────────────────────────
 
     @GetMapping("/health")

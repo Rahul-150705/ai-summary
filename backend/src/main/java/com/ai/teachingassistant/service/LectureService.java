@@ -183,6 +183,29 @@ public class LectureService {
         log.info("Lecture deleted: id={} by user='{}'", id, userId);
     }
 
+    // ── Re-index ──────────────────────────────────────────────────────────
+
+    /**
+     * Re-indexes a lecture's stored text into the pgvector store.
+     * Used to recover lectures whose RAG indexing failed silently during upload
+     * (e.g. because the embedding model was not yet installed at that time).
+     *
+     * @throws ResponseStatusException 404 if not found, 403 if wrong owner.
+     */
+    public void reindexLecture(String lectureId, String userId) {
+        Lecture lecture = getLectureById(lectureId, userId);
+
+        if (lecture.getOriginalText() == null || lecture.getOriginalText().isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.UNPROCESSABLE_ENTITY,
+                    "No stored text available for lecture: " + lectureId);
+        }
+
+        log.info("Re-indexing lecture: id={}, user={}", lectureId, userId);
+        ragService.indexLecture(lectureId, lecture.getOriginalText());
+        log.info("Re-indexing complete for lectureId={}", lectureId);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     /**
