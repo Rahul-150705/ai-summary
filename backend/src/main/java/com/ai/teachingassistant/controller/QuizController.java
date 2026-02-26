@@ -4,6 +4,9 @@ import com.ai.teachingassistant.dto.QuizQuestion;
 import com.ai.teachingassistant.dto.QuizResponse;
 import com.ai.teachingassistant.dto.QuizSubmitRequest;
 import com.ai.teachingassistant.dto.QuizSubmitResponse;
+import com.ai.teachingassistant.model.QuizAttempt;
+import com.ai.teachingassistant.repository.LectureRepository;
+import com.ai.teachingassistant.repository.QuizAttemptRepository;
 import com.ai.teachingassistant.service.QuizService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,14 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * QuizController exposes REST endpoints for quiz generation and answer
- * submission.
- *
- * POST /api/quiz/{lectureId}/generate → generate MCQ quiz for a lecture
- * POST /api/quiz/{lectureId}/submit → submit answers and get score +
- * per-question result
- */
 @Slf4j
 @RestController
 @RequestMapping("/api/quiz")
@@ -32,22 +27,14 @@ import java.util.concurrent.ConcurrentHashMap;
 public class QuizController {
 
     private final QuizService quizService;
+    private final QuizAttemptRepository quizAttemptRepository;
+    private final LectureRepository lectureRepository;
 
-    /**
-     * In-memory cache: lectureId → list of generated questions.
-     * Used to validate answers on submission without re-calling the LLM.
-     */
+    /** In-memory cache: lectureId → generated questions for answer grading */
     private final ConcurrentHashMap<String, List<QuizQuestion>> quizCache = new ConcurrentHashMap<>();
 
     // ── POST /api/quiz/{lectureId}/generate ──────────────────────────────────
 
-    /**
-     * Generates a fresh MCQ quiz for the given lecture.
-     *
-     * @param lectureId    The lecture to quiz on.
-     * @param numQuestions Number of questions to generate (default 10, max 20).
-     * @param principal    Authenticated user.
-     */
     @PostMapping("/{lectureId}/generate")
     public ResponseEntity<?> generateQuiz(
             @PathVariable String lectureId,
@@ -63,12 +50,8 @@ public class QuizController {
 
         try {
             QuizResponse quiz = quizService.generateQuiz(lectureId, userId, numQuestions);
-
-            // Cache questions so /submit can grade them
             quizCache.put(lectureId, quiz.getQuestions());
-
             return ResponseEntity.ok(quiz);
-
         } catch (Exception e) {
             log.error("Quiz generation failed for lectureId={}: {}", lectureId, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -78,27 +61,6 @@ public class QuizController {
 
     // ── POST /api/quiz/{lectureId}/submit ────────────────────────────────────
 
-    /**
-     * Accepts the user's answers and returns a graded result.
-     *
-     * Request body:
-     * {
-     * "answers": ["A", "C", "B", ...] // one letter per question, in order
-     * }
-     *
-     * Response:
-     * {
-     * "score": 7,
-     * "totalQuestions": 10,
-     * "percentage": 70,
-     * "grade": "Good 👍",
-     * "results": [
-     * { "index": 0, "question": "...", "selectedAnswer": "A",
-     * "correctAnswer": "C", "correct": false, "explanation": "..." },
-     * ...
-     * ]
-     * }
-     */
     @PostMapping("/{lectureId}/submit")
     public ResponseEntity<?> submitQuiz(
             @PathVariable String lectureId,
@@ -119,6 +81,28 @@ public class QuizController {
         try {
             QuizSubmitResponse result = quizService.submitQuiz(
                     lectureId, userId, questions, submitRequest);
+
+            // ── Persist the attempt so stats & history work ──────────────
+            try {
+                String fileName = lectureRepository.findById(lectureId)
+                        .map(l -> l.getFileName()).orElse("Unknown");
+
+                quizAttemptRepository.save(QuizAttempt.builder()
+                        .lectureId(lectureId)
+                        .lectureFileName(fileName)
+                        .userId(userId)
+                        .score(result.getScore())
+                        .totalQuestions(result.getTotalQuestions())
+                        .percentage(result.getPercentage())
+                        .grade(result.getGrade())
+                        .build());
+
+                log.info("Quiz attempt saved: user={}, lecture={}, score={}%",
+                        userId, lectureId, result.getPercentage());
+            } catch (Exception saveEx) {
+                log.warn("Failed to save quiz attempt (non-fatal): {}", saveEx.getMessage());
+            }
+
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {
@@ -126,5 +110,17 @@ public class QuizController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "Quiz submission failed: " + e.getMessage()));
         }
+    }
+
+    // ── GET /api/quiz/history ────────────────────────────────────────────────
+
+    @GetMapping("/history")
+    public ResponseEntity<?> getQuizHistory(Principal principal) {
+        if (principal == null)
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Not authenticated"));
+
+        List<QuizAttempt> attempts = quizAttemptRepository
+                .findByUserIdOrderByAttemptedAtDesc(principal.getName());
+        return ResponseEntity.ok(attempts);
     }
 }

@@ -46,6 +46,16 @@ public class LectureService {
     private final ObjectMapper objectMapper;
     private final RagService ragService;
 
+    // ── Stats helpers ─────────────────────────────────────────────────────
+
+    public long countByUser(String userId) {
+        return lectureRepository.countByUserId(userId);
+    }
+
+    public long sumPagesByUser(String userId) {
+        return lectureRepository.sumPageCountByUserId(userId);
+    }
+
     // ── Upload & Summarize ────────────────────────────────────────────────
 
     /**
@@ -142,7 +152,199 @@ public class LectureService {
         return processLecture(file, null);
     }
 
-    // ── History ───────────────────────────────────────────────────────────
+    // ── Smart Process (mode-aware) ────────────────────────────────────────
+
+    /**
+     * Unified entry-point for the Smart Upload flow.
+     *
+     * <ul>
+     * <li><b>mode=summary</b> — full synchronous pipeline; returns a complete
+     * {@link ProcessResponse} with the summary embedded.</li>
+     * <li><b>mode=chat | mode=quiz</b> — extracts text + indexes chunks
+     * synchronously (so RAG Q&amp;A is immediately available), then fires
+     * async summarization in the background. Returns the lectureId
+     * immediately so the user can start asking questions or taking the quiz
+     * without waiting for the LLM.</li>
+     * </ul>
+     *
+     * @param file   the uploaded PDF
+     * @param userId authenticated user ID
+     * @param mode   "summary" | "chat" | "quiz"
+     */
+    public com.ai.teachingassistant.dto.ProcessResponse processLectureWithMode(
+            MultipartFile file, String userId, String mode)
+            throws IOException, InterruptedException {
+
+        // ── Summary mode: reuse the existing full pipeline ───────────────
+        if ("summary".equalsIgnoreCase(mode)) {
+            SummaryResponse summary = processLecture(file, userId);
+            return com.ai.teachingassistant.dto.ProcessResponse.builder()
+                    .lectureId(summary.getLectureId())
+                    .mode(mode)
+                    .status("complete")
+                    .fileName(summary.getFileName())
+                    .pageCount(summary.getPageCount())
+                    .chunksIndexed(-1)
+                    .summary(summary)
+                    .build();
+        }
+
+        // ── Chat / Quiz mode: fast path — no blocking LLM call ───────────
+        String fileName = file.getOriginalFilename() != null
+                ? file.getOriginalFilename()
+                : "unknown.pdf";
+
+        log.info("Smart-process ({}) request: file='{}', user='{}'", mode, fileName, userId);
+        long startTime = System.currentTimeMillis();
+
+        byte[] pdfBytes = file.getBytes();
+        String contentHash = computeMd5(pdfBytes);
+
+        // Return existing lecture if same PDF was already processed
+        Optional<Lecture> cached = lectureRepository.findFirstByContentHash(contentHash);
+        if (cached.isPresent()) {
+            Lecture c = cached.get();
+            log.info("Smart-process cache HIT for hash={}, reusing lectureId={}", contentHash, c.getId());
+            return com.ai.teachingassistant.dto.ProcessResponse.builder()
+                    .lectureId(c.getId())
+                    .mode(mode)
+                    .status("indexing_complete")
+                    .fileName(fileName)
+                    .pageCount(c.getPageCount())
+                    .chunksIndexed(0)
+                    .build();
+        }
+
+        // Extract text from PDF
+        String extractedText = pdfExtractionService.extractText(file);
+        int pageCount = countPagesFromText(extractedText);
+
+        // Save lecture record (summary is null — will be filled in async later)
+        Lecture lecture = Lecture.builder()
+                .id(UUID.randomUUID().toString())
+                .fileName(fileName)
+                .originalText(extractedText)
+                .summary(null)
+                .provider(null)
+                .fileSizeBytes(file.getSize())
+                .pageCount(pageCount)
+                .processedAt(LocalDateTime.now())
+                .userId(userId)
+                .contentHash(contentHash)
+                .build();
+        lectureRepository.save(lecture);
+        log.info("Smart-process lecture saved: id={}, pages={}", lecture.getId(), pageCount);
+
+        // Index chunks synchronously — RAG Q&A works immediately after this
+        int chunksIndexed = 0;
+        try {
+            chunksIndexed = ragService.indexLectureAndCount(lecture.getId(), extractedText);
+        } catch (Exception e) {
+            log.error("Smart-process indexing failed for lectureId={}: {}", lecture.getId(), e.getMessage(), e);
+        }
+
+        // NOTE: No async summarization here — the frontend triggers streaming
+        // summarization via POST /api/lecture/{id}/summarize-stream after
+        // connecting to the WebSocket. This avoids double LLM calls and ensures
+        // the user sees real-time streaming text.
+
+        log.info("Smart-process ({}) returned in {}ms for lectureId={}",
+                mode, System.currentTimeMillis() - startTime, lecture.getId());
+
+        return com.ai.teachingassistant.dto.ProcessResponse.builder()
+                .lectureId(lecture.getId())
+                .mode(mode)
+                .status("indexing_complete")
+                .fileName(fileName)
+                .pageCount(pageCount)
+                .chunksIndexed(chunksIndexed)
+                .build();
+    }
+
+    /**
+     * "Quick index" mode: extract PDF text, index into pgvector for RAG,
+     * save a minimal Lecture record — but do NOT call the LLM for summarization.
+     *
+     * <p>
+     * On success the lectureId can immediately be used for Q&amp;A and quiz
+     * generation.
+     * </p>
+     *
+     * @param file   the uploaded PDF
+     * @param userId the authenticated user's ID
+     * @return a {@link com.ai.teachingassistant.dto.QuickIndexResponse} with
+     *         lectureId + stats
+     */
+    public com.ai.teachingassistant.dto.QuickIndexResponse indexLectureOnly(
+            MultipartFile file, String userId) throws IOException {
+
+        String fileName = file.getOriginalFilename() != null
+                ? file.getOriginalFilename()
+                : "unknown.pdf";
+
+        log.info("Quick-index request: file='{}', size={}KB, user='{}'",
+                fileName, file.getSize() / 1024, userId);
+        long startTime = System.currentTimeMillis();
+
+        // ── Step 1: compute hash — return cached lectureId if same PDF ───
+        byte[] pdfBytes = file.getBytes();
+        String contentHash = computeMd5(pdfBytes);
+
+        java.util.Optional<Lecture> cached = lectureRepository.findFirstByContentHash(contentHash);
+        if (cached.isPresent()) {
+            Lecture c = cached.get();
+            log.info("Quick-index cache HIT for hash={} — reusing lectureId={}", contentHash, c.getId());
+            return com.ai.teachingassistant.dto.QuickIndexResponse.builder()
+                    .lectureId(c.getId())
+                    .fileName(fileName)
+                    .pageCount(c.getPageCount())
+                    .chunksIndexed(0) // already indexed
+                    .mode("quick_index")
+                    .build();
+        }
+
+        // ── Step 2: extract PDF text ─────────────────────────────────────
+        String extractedText = pdfExtractionService.extractText(file);
+        int pageCount = countPagesFromText(extractedText);
+
+        // ── Step 3: save a minimal lecture record (no summary) ───────────
+        Lecture lecture = Lecture.builder()
+                .id(java.util.UUID.randomUUID().toString())
+                .fileName(fileName)
+                .originalText(extractedText)
+                .summary(null) // no summary generated
+                .provider(null)
+                .fileSizeBytes(file.getSize())
+                .pageCount(pageCount)
+                .processedAt(LocalDateTime.now())
+                .userId(userId)
+                .contentHash(contentHash)
+                .build();
+
+        lectureRepository.save(lecture);
+        log.info("Quick-index lecture saved: id={}, pages={}", lecture.getId(), pageCount);
+
+        // ── Step 4: index into pgvector ──────────────────────────────────
+        int chunksIndexed = 0;
+        try {
+            chunksIndexed = ragService.indexLectureAndCount(lecture.getId(), extractedText);
+        } catch (Exception e) {
+            log.error("Quick-index: RAG indexing failed for lectureId={}: {}",
+                    lecture.getId(), e.getMessage(), e);
+            // Non-fatal: lecture is saved, can be re-indexed later
+        }
+
+        log.info("Quick-index complete: id={}, chunks={}, elapsed={}ms",
+                lecture.getId(), chunksIndexed, System.currentTimeMillis() - startTime);
+
+        return com.ai.teachingassistant.dto.QuickIndexResponse.builder()
+                .lectureId(lecture.getId())
+                .fileName(fileName)
+                .pageCount(pageCount)
+                .chunksIndexed(chunksIndexed)
+                .mode("quick_index")
+                .build();
+    }
 
     /**
      * Returns all lectures for a user as lightweight DTOs (no originalText).

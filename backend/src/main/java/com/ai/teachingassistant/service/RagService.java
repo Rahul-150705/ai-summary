@@ -75,6 +75,14 @@ public class RagService {
          * @param extractedText the full text extracted from the PDF
          */
         public void indexLecture(String lectureId, String extractedText) {
+                indexLectureAndCount(lectureId, extractedText);
+        }
+
+        /**
+         * Same as {@link #indexLecture} but also returns the number of chunks stored —
+         * used by the quick-index flow to include the count in the API response.
+         */
+        public int indexLectureAndCount(String lectureId, String extractedText) {
                 List<String> chunks = chunkText(extractedText);
                 log.info("Indexing {} chunks for lectureId={}", chunks.size(), lectureId);
 
@@ -84,6 +92,7 @@ public class RagService {
 
                 vectorStore.add(documents);
                 log.info("Successfully indexed {} chunks for lectureId={}", documents.size(), lectureId);
+                return documents.size();
         }
 
         /**

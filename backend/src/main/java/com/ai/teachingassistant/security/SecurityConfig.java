@@ -45,6 +45,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/lecture/health").permitAll()
+                        .requestMatchers("/ws/**").permitAll() // WebSocket handshake (SockJS)
                         .requestMatchers("/api/lecture/**").authenticated()
                         .requestMatchers("/api/quiz/**").authenticated()
                         .anyRequest().authenticated())
