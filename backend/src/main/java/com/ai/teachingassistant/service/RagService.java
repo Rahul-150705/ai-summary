@@ -1,6 +1,9 @@
 package com.ai.teachingassistant.service;
 
 import com.ai.teachingassistant.dto.AskQuestionResponse;
+import com.ai.teachingassistant.dto.QaStreamMessage;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -8,11 +11,18 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -43,6 +53,15 @@ public class RagService {
 
         private final VectorStore vectorStore;
         private final ChatClient chatClient;
+        private final WebClient ollamaWebClient;
+        private final SimpMessagingTemplate messagingTemplate;
+        private final ObjectMapper objectMapper;
+
+        @Value("${ollama.model:llama3.2}")
+        private String ollamaModel;
+
+        /** STOMP destination prefix for streaming Q&A messages. */
+        private static final String QA_TOPIC_PREFIX = "/topic/lectures/";
 
         // ── Tuning constants ────────────────────────────────────────────────────
 
@@ -177,6 +196,149 @@ public class RagService {
                                 .sourceChunks(sourceChunks)
                                 .chunksUsed(sourceChunks.size())
                                 .build();
+        }
+
+        // ── Streaming Q&A ───────────────────────────────────────────────────────
+
+        /**
+         * Streams an answer to a student question over WebSocket.
+         *
+         * <ol>
+         * <li>Retrieves the top-K most relevant chunks from pgvector (fast).</li>
+         * <li>Builds a context-grounded prompt.</li>
+         * <li>Calls Ollama with {@code stream: true} via WebClient.</li>
+         * <li>Pushes each answer token as an {@code ANSWER_CHUNK} to
+         * {@code /topic/lectures/{lectureId}/qa}.</li>
+         * <li>On completion, sends {@code ANSWER_COMPLETED} with the full answer
+         * and source chunks.</li>
+         * </ol>
+         *
+         * @param lectureId the UUID of the lecture to query
+         * @param question  the student's question
+         */
+        @Async("summarizationExecutor")
+        public CompletableFuture<Void> streamAnswer(String lectureId, String question) {
+                log.info("Streaming RAG Q&A: lectureId={}, question='{}'", lectureId, question);
+                String destination = QA_TOPIC_PREFIX + lectureId + "/qa";
+
+                try {
+                        // ── Step 1: retrieve the most relevant chunks ────────────────
+                        var b = new FilterExpressionBuilder();
+                        List<Document> relevantDocs = vectorStore.similaritySearch(
+                                        SearchRequest.builder()
+                                                        .query(question)
+                                                        .topK(TOP_K)
+                                                        .filterExpression(b.eq("lectureId", lectureId).build())
+                                                        .build());
+
+                        if (relevantDocs == null || relevantDocs.isEmpty()) {
+                                log.warn("No relevant chunks found for streaming Q&A, lectureId={}", lectureId);
+                                messagingTemplate.convertAndSend(destination,
+                                                QaStreamMessage.completed(lectureId, question,
+                                                                "I couldn't find relevant content in this lecture to answer your question. "
+                                                                                + "Try rephrasing or ask about a different topic covered in the lecture.",
+                                                                List.of(), 0));
+                                return CompletableFuture.completedFuture(null);
+                        }
+
+                        List<String> sourceChunks = relevantDocs.stream()
+                                        .map(Document::getText)
+                                        .collect(Collectors.toList());
+
+                        log.debug("Retrieved {} relevant chunks for streaming Q&A", sourceChunks.size());
+
+                        // ── Step 2: build the context-grounded prompt ─────────────────
+                        String context = String.join("\n\n---\n\n", sourceChunks);
+                        String prompt = """
+                                        You are a helpful teaching assistant. A student is asking a question about
+                                        their lecture. Answer using ONLY the lecture content provided below.
+
+                                        Rules:
+                                        - Be clear and concise.
+                                        - If the answer is not in the provided content, say exactly:
+                                          "I couldn't find that in this lecture. Try asking about something else covered here."
+                                        - Do NOT make up information beyond what is in the content.
+                                        - Use bullet points or numbered lists when the answer has multiple parts.
+
+                                        --- LECTURE CONTENT ---
+                                        %s
+                                        --- END OF LECTURE CONTENT ---
+
+                                        STUDENT QUESTION: %s
+
+                                        ANSWER:
+                                        """
+                                        .formatted(context, question);
+
+                        // ── Step 3: stream from Ollama via WebClient ──────────────────
+                        StringBuilder fullAnswer = new StringBuilder();
+                        AtomicReference<Throwable> streamError = new AtomicReference<>();
+
+                        Map<String, Object> requestBody = Map.of(
+                                        "model", ollamaModel,
+                                        "prompt", prompt,
+                                        "stream", true,
+                                        "num_predict", 2000);
+
+                        Flux<String> chunkFlux = ollamaWebClient.post()
+                                        .bodyValue(requestBody)
+                                        .retrieve()
+                                        .bodyToFlux(String.class);
+
+                        chunkFlux
+                                        .doOnNext(line -> {
+                                                try {
+                                                        JsonNode node = objectMapper.readTree(line);
+                                                        String token = node.path("response").asText("");
+
+                                                        if (!token.isEmpty()) {
+                                                                fullAnswer.append(token);
+                                                                messagingTemplate.convertAndSend(destination,
+                                                                                QaStreamMessage.chunk(lectureId,
+                                                                                                token));
+                                                        }
+                                                } catch (Exception e) {
+                                                        log.warn("Failed to parse Ollama Q&A chunk for lectureId={}: {}",
+                                                                        lectureId, e.getMessage());
+                                                }
+                                        })
+                                        .doOnError(error -> {
+                                                log.error("Stream error during Q&A for lectureId={}: {}",
+                                                                lectureId, error.getMessage(), error);
+                                                streamError.set(error);
+                                        })
+                                        .blockLast(); // safe — running on dedicated @Async thread
+
+                        // ── Step 4: handle errors / send completion ───────────────────
+                        if (streamError.get() != null) {
+                                messagingTemplate.convertAndSend(destination,
+                                                QaStreamMessage.error(lectureId,
+                                                                "Streaming failed: " + streamError.get().getMessage()));
+                                return CompletableFuture.completedFuture(null);
+                        }
+
+                        String answer = fullAnswer.toString();
+                        if (answer.isBlank()) {
+                                messagingTemplate.convertAndSend(destination,
+                                                QaStreamMessage.error(lectureId, "Ollama returned an empty response."));
+                                return CompletableFuture.completedFuture(null);
+                        }
+
+                        log.info("Streaming Q&A complete: lectureId={}, answerLen={}, chunksUsed={}",
+                                        lectureId, answer.length(), sourceChunks.size());
+
+                        messagingTemplate.convertAndSend(destination,
+                                        QaStreamMessage.completed(lectureId, question,
+                                                        answer, sourceChunks, sourceChunks.size()));
+
+                } catch (Exception e) {
+                        log.error("Streaming Q&A FAILED for lectureId={}: {}",
+                                        lectureId, e.getMessage(), e);
+                        messagingTemplate.convertAndSend(destination,
+                                        QaStreamMessage.error(lectureId, "Q&A failed: " + e.getMessage()));
+                }
+
+                return CompletableFuture.completedFuture(null);
         }
 
         // ── Private helpers ─────────────────────────────────────────────────────

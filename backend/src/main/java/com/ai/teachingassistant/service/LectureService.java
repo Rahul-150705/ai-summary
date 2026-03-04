@@ -86,16 +86,22 @@ public class LectureService {
         // ── Step 2: cache lookup ─────────────────────────────────────────
         Optional<Lecture> cached = lectureRepository.findFirstByContentHash(contentHash);
         if (cached.isPresent()) {
+            Lecture cachedLecture = cached.get();
             log.info("Cache HIT for hash={} (file='{}') — skipping LLM call. elapsed={}ms",
                     contentHash, fileName, System.currentTimeMillis() - startTime);
-            SummaryResponse cachedResponse = deserializeFromJson(cached.get().getSummary());
-            // Attach the original lecture ID so quiz generation still works
-            cachedResponse.setLectureId(cached.get().getId());
+
+            // Claim orphaned lectures (uploaded before auth existed)
+            claimIfOrphaned(cachedLecture, userId);
+
+            SummaryResponse cachedResponse = deserializeFromJson(cachedLecture.getSummary());
+            cachedResponse.setLectureId(cachedLecture.getId());
             cachedResponse.setFromCache(true);
-            // Reflect the new filename in case user renamed the PDF
             cachedResponse.setFileName(fileName);
-            // Note: vectors are already indexed from the first upload — no re-indexing
-            // needed
+
+            // Re-index if vectors may be missing (e.g. embedding model wasn't
+            // available during the original upload)
+            tryReindexIfNeeded(cachedLecture);
+
             return cachedResponse;
         }
 
@@ -205,13 +211,21 @@ public class LectureService {
         if (cached.isPresent()) {
             Lecture c = cached.get();
             log.info("Smart-process cache HIT for hash={}, reusing lectureId={}", contentHash, c.getId());
+
+            // Claim orphaned lectures (uploaded before auth existed)
+            claimIfOrphaned(c, userId);
+
+            // Re-index vectors — they may be missing if the embedding model
+            // wasn't available during the original upload
+            int chunksIndexed = tryReindexIfNeeded(c);
+
             return com.ai.teachingassistant.dto.ProcessResponse.builder()
                     .lectureId(c.getId())
                     .mode(mode)
                     .status("indexing_complete")
                     .fileName(fileName)
                     .pageCount(c.getPageCount())
-                    .chunksIndexed(0)
+                    .chunksIndexed(chunksIndexed)
                     .build();
         }
 
@@ -294,11 +308,18 @@ public class LectureService {
         if (cached.isPresent()) {
             Lecture c = cached.get();
             log.info("Quick-index cache HIT for hash={} — reusing lectureId={}", contentHash, c.getId());
+
+            // Claim orphaned lectures
+            claimIfOrphaned(c, userId);
+
+            // Re-index if needed
+            int chunksIndexed = tryReindexIfNeeded(c);
+
             return com.ai.teachingassistant.dto.QuickIndexResponse.builder()
                     .lectureId(c.getId())
                     .fileName(fileName)
                     .pageCount(c.getPageCount())
-                    .chunksIndexed(0) // already indexed
+                    .chunksIndexed(chunksIndexed)
                     .mode("quick_index")
                     .build();
         }
@@ -367,10 +388,18 @@ public class LectureService {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Lecture not found: " + id));
 
-        if (userId != null && !userId.equals(lecture.getUserId())) {
+        // Allow access if: (a) no userId given, (b) matches owner, or
+        // (c) lecture has no owner (legacy data from before auth existed)
+        if (userId != null
+                && lecture.getUserId() != null
+                && !userId.equals(lecture.getUserId())) {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN, "Access denied to lecture: " + id);
         }
+
+        // Claim orphaned lectures for the requesting user
+        claimIfOrphaned(lecture, userId);
+
         return lecture;
     }
 
@@ -406,6 +435,38 @@ public class LectureService {
         log.info("Re-indexing lecture: id={}, user={}", lectureId, userId);
         ragService.indexLecture(lectureId, lecture.getOriginalText());
         log.info("Re-indexing complete for lectureId={}", lectureId);
+    }
+
+    // ── Ownership & re-indexing helpers ────────────────────────────────────
+
+    /**
+     * If this lecture has no owner (legacy upload), assign it to the given user.
+     */
+    private void claimIfOrphaned(Lecture lecture, String userId) {
+        if (userId != null && lecture.getUserId() == null) {
+            lecture.setUserId(userId);
+            lectureRepository.save(lecture);
+            log.info("Claimed orphaned lecture {} for user={}", lecture.getId(), userId);
+        }
+    }
+
+    /**
+     * Re-indexes a lecture's text into the vector store if it has stored text.
+     * Returns the number of chunks indexed (0 if skipped or failed).
+     */
+    private int tryReindexIfNeeded(Lecture lecture) {
+        if (lecture.getOriginalText() == null || lecture.getOriginalText().isBlank()) {
+            log.debug("No stored text for lectureId={}, skipping re-index", lecture.getId());
+            return 0;
+        }
+        try {
+            int count = ragService.indexLectureAndCount(lecture.getId(), lecture.getOriginalText());
+            log.info("Re-indexed {} chunks for lectureId={}", count, lecture.getId());
+            return count;
+        } catch (Exception e) {
+            log.error("Re-index failed for lectureId={}: {}", lecture.getId(), e.getMessage(), e);
+            return 0;
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

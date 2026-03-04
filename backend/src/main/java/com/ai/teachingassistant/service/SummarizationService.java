@@ -30,18 +30,53 @@ public class SummarizationService {
     private static final String FURTHER_READING_HEADER = "[FURTHER_READING]";
 
     /**
+     * Maximum characters per chunk sent to the LLM in a single call.
+     * ~8,000 chars ≈ ~2,000 tokens — leaves room for prompt + response within
+     * typical context windows.
+     */
+    private static final int CHUNK_SIZE = 8000;
+
+    /**
+     * Overlap between adjacent chunks (chars). Ensures we don't lose context
+     * at chunk boundaries (e.g. mid-sentence splits).
+     */
+    private static final int CHUNK_OVERLAP = 500;
+
+    /**
+     * If the text is shorter than this, process it in a single pass (no
+     * map-reduce overhead needed).
+     */
+    private static final int SINGLE_PASS_THRESHOLD = 10000;
+
+    /**
      * Generates a structured summary from the extracted lecture text.
+     * For long documents, uses a Map-Reduce strategy:
+     * 1. Split text into overlapping chunks
+     * 2. Summarize each chunk individually (Map phase)
+     * 3. Combine chunk summaries into a final structured summary (Reduce phase)
      */
     public SummaryResponse generateSummary(String extractedText, String fileName, int pageCount)
             throws IOException, InterruptedException {
 
-        log.info("Generating summary for file: {}", fileName);
+        log.info("Generating summary for file: {} ({} chars, ~{} pages)",
+                fileName, extractedText.length(), pageCount);
 
-        String prompt = buildPrompt(extractedText);
-        log.debug("Prompt constructed. Length: {} characters", prompt.length());
+        String rawResponse;
 
-        String rawResponse = llmClient.sendPrompt(prompt);
-        log.debug("LLM raw response received. Length: {} characters", rawResponse.length());
+        if (extractedText.length() <= SINGLE_PASS_THRESHOLD) {
+            // ── Short document: single-pass summarization ────────────────
+            log.info("Short document — using single-pass summarization.");
+            String prompt = buildFinalPrompt(extractedText);
+            rawResponse = llmClient.sendPrompt(prompt);
+        } else {
+            // ── Long document: Map-Reduce chunked summarization ──────────
+            log.info("Long document ({} chars) — using Map-Reduce chunked summarization.",
+                    extractedText.length());
+            rawResponse = mapReduceSummarize(extractedText);
+        }
+
+        log.debug("LLM final response received. Length: {} characters",
+                rawResponse != null ? rawResponse.length() : 0);
 
         if (rawResponse == null || rawResponse.isBlank()) {
             log.error("LLM returned an empty response for file: {}", fileName);
@@ -51,11 +86,175 @@ public class SummarizationService {
         return parseResponse(rawResponse, fileName, pageCount);
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // MAP-REDUCE SUMMARIZATION
+    // ═════════════════════════════════════════════════════════════════════════
+
     /**
-     * Constructs an enhanced prompt that requests a comprehensive, detailed
-     * summary.
+     * Splits the full text into chunks, summarizes each one (MAP), then
+     * combines all chunk summaries into a single final summary (REDUCE).
      */
-    private String buildPrompt(String lectureText) {
+    private String mapReduceSummarize(String fullText) throws IOException, InterruptedException {
+        List<String> chunks = splitIntoChunks(fullText, CHUNK_SIZE, CHUNK_OVERLAP);
+        log.info("Split document into {} chunks for Map-Reduce.", chunks.size());
+
+        // ── MAP PHASE: summarize each chunk ──────────────────────────────
+        List<String> chunkSummaries = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i++) {
+            log.info("MAP phase: summarizing chunk {}/{} ({} chars)",
+                    i + 1, chunks.size(), chunks.get(i).length());
+
+            String chunkPrompt = buildChunkPrompt(chunks.get(i), i + 1, chunks.size());
+            String chunkSummary = llmClient.sendPrompt(chunkPrompt);
+
+            if (chunkSummary != null && !chunkSummary.isBlank()) {
+                chunkSummaries.add(chunkSummary.trim());
+            } else {
+                log.warn("Chunk {}/{} returned empty summary — skipping.", i + 1, chunks.size());
+            }
+        }
+
+        if (chunkSummaries.isEmpty()) {
+            throw new IOException("All chunk summaries were empty. The AI model may be unavailable.");
+        }
+
+        // ── REDUCE PHASE: combine chunk summaries into final output ──────
+        log.info("REDUCE phase: combining {} chunk summaries into final structured summary.",
+                chunkSummaries.size());
+
+        String combinedSummaries = String.join("\n\n---\n\n", chunkSummaries);
+        String reducePrompt = buildReducePrompt(combinedSummaries);
+        return llmClient.sendPrompt(reducePrompt);
+    }
+
+    /**
+     * Splits text into overlapping chunks. Tries to break at paragraph or
+     * sentence boundaries rather than mid-word.
+     */
+    private List<String> splitIntoChunks(String text, int chunkSize, int overlap) {
+        List<String> chunks = new ArrayList<>();
+        int start = 0;
+
+        while (start < text.length()) {
+            int end = Math.min(start + chunkSize, text.length());
+
+            // Try to find a natural break point near the end (paragraph, then sentence)
+            if (end < text.length()) {
+                int naturalBreak = findNaturalBreak(text, start + (chunkSize / 2), end);
+                if (naturalBreak > start) {
+                    end = naturalBreak;
+                }
+            }
+
+            chunks.add(text.substring(start, end).trim());
+
+            // Move start forward, subtracting overlap for context continuity
+            start = end - overlap;
+            if (start <= 0 && end >= text.length())
+                break;
+            if (start >= text.length())
+                break;
+        }
+
+        return chunks;
+    }
+
+    /**
+     * Finds the best natural break point (double-newline > period+space >
+     * single newline) searching backward from {@code end} to {@code earliest}.
+     */
+    private int findNaturalBreak(String text, int earliest, int end) {
+        // Prefer paragraph boundary (\n\n)
+        int idx = text.lastIndexOf("\n\n", end);
+        if (idx >= earliest)
+            return idx + 2;
+
+        // Next: sentence boundary (. followed by space or newline)
+        idx = text.lastIndexOf(". ", end);
+        if (idx >= earliest)
+            return idx + 2;
+
+        // Fallback: any newline
+        idx = text.lastIndexOf("\n", end);
+        if (idx >= earliest)
+            return idx + 1;
+
+        return end; // no good break found — hard cut
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // PROMPTS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Prompt for the MAP phase — summarize a single chunk.
+     * Asks for a concise but thorough summary without the structured headers
+     * (those are applied in the REDUCE phase).
+     */
+    private String buildChunkPrompt(String chunkText, int chunkNumber, int totalChunks) {
+        return """
+                You are an expert university-level teaching assistant.
+                You are reading PART %d of %d of a lecture document.
+
+                Summarize this section thoroughly. Include:
+                - All key concepts and ideas mentioned
+                - Important definitions and terminology
+                - Any examples or case studies
+                - Exam-worthy points
+
+                Write in clear, full sentences. Be comprehensive — do not skip important details.
+                Keep your summary between 300-600 words.
+
+                --- LECTURE SECTION %d/%d ---
+                %s
+                --- END SECTION ---
+                """
+                .formatted(chunkNumber, totalChunks, chunkNumber, totalChunks, chunkText);
+    }
+
+    /**
+     * Prompt for the REDUCE phase — combine all chunk summaries into the
+     * final structured output using the same section markers the frontend
+     * expects.
+     */
+    private String buildReducePrompt(String combinedSummaries) {
+        return """
+                You are an expert university-level teaching assistant.
+                Below are summaries of different sections of a lecture document.
+                Your job is to combine them into ONE comprehensive, well-structured summary.
+
+                Eliminate redundancy. Merge overlapping points. Ensure nothing important is lost.
+
+                Use EXACTLY these section markers on their own line. Start each section on a new line.
+                Write in full sentences. Do not skip any section.
+
+                [TITLE]
+                Write a short, descriptive title for this lecture.
+
+                [OVERVIEW]
+                Write 4-5 sentences summarising what this lecture is about, its main goals and key arguments.
+
+                [KEY_CONCEPTS]
+                List at least 8 key concepts as bullet points starting with "- ". Each bullet must be a full sentence.
+
+                [DEFINITIONS]
+                List at least 6 important terms as bullet points starting with "- Term: definition".
+
+                [DETAILED_EXPLANATION]
+                Write 3 to 5 paragraphs (separated by blank lines) that deeply explain the most important ideas, with examples.
+
+                --- SECTION SUMMARIES ---
+                %s
+                --- END ---
+                """
+                .formatted(combinedSummaries);
+    }
+
+    /**
+     * Prompt for short documents — single-pass structured summarization.
+     * (Same as the original buildPrompt.)
+     */
+    private String buildFinalPrompt(String lectureText) {
         return """
                 You are an expert university-level teaching assistant.
                 Read the lecture content below and produce a detailed, well-structured summary.
@@ -78,18 +277,16 @@ public class SummarizationService {
                 [DETAILED_EXPLANATION]
                 Write 3 to 5 paragraphs (separated by blank lines) that deeply explain the most important ideas, with examples.
 
-                [EXAM_POINTS]
-                List at least 8 exam-focused takeaways as bullet points starting with "- ".
-
-                [FURTHER_READING]
-                List 2-3 recommended resources (books, websites, or topics) as bullet points starting with "- ".
-
                 --- LECTURE CONTENT ---
                 %s
                 --- END ---
                 """
-                .formatted(truncateText(lectureText, 12000));
+                .formatted(lectureText);
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // RESPONSE PARSING
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
      * Parses the structured LLM response into a SummaryResponse DTO.
@@ -243,13 +440,5 @@ public class SummarizationService {
                 .map(line -> line.replaceFirst("^[-•*]\\s+", "").trim())
                 .filter(line -> !line.isEmpty())
                 .collect(Collectors.toList());
-    }
-
-    /** Truncates text to a max character count to respect LLM token limits. */
-    private String truncateText(String text, int maxChars) {
-        if (text.length() <= maxChars)
-            return text;
-        log.warn("Lecture text truncated from {} to {} characters for LLM context limit.", text.length(), maxChars);
-        return text.substring(0, maxChars) + "\n\n[... content truncated due to length ...]";
     }
 }

@@ -71,4 +71,52 @@ public class RagController {
                     .body(Map.of("error", "Failed to answer your question. Please try again."));
         }
     }
+
+    // ── POST /api/lecture/{lectureId}/ask-stream ──────────────────────────
+
+    /**
+     * Triggers streaming Q&amp;A — the answer arrives token-by-token via WebSocket.
+     *
+     * <p>
+     * <b>Client usage:</b>
+     * <ol>
+     * <li>Subscribe to {@code /topic/lectures/{lectureId}/qa} via WebSocket.</li>
+     * <li>Call {@code POST /api/lecture/{lectureId}/ask-stream} with the
+     * question.</li>
+     * <li>Receive {@code ANSWER_CHUNK} messages with individual tokens.</li>
+     * <li>Receive {@code ANSWER_COMPLETED} with full answer and source chunks.</li>
+     * </ol>
+     *
+     * @param lectureId the lecture to query
+     * @param request   the question body
+     * @param principal the authenticated user
+     * @return 202 ACCEPTED immediately — answer arrives via WebSocket
+     */
+    @PostMapping("/{lectureId}/ask-stream")
+    public ResponseEntity<?> askQuestionStream(
+            @PathVariable String lectureId,
+            @Valid @RequestBody AskQuestionRequest request,
+            Principal principal) {
+
+        String userId = (principal != null) ? principal.getName() : "anonymous";
+        log.info("Streaming Q&A request: lectureId={}, user='{}', question='{}'",
+                lectureId, userId, request.getQuestion());
+
+        try {
+            ragService.streamAnswer(lectureId, request.getQuestion());
+
+            return ResponseEntity.accepted()
+                    .body(Map.of(
+                            "status", "streaming_started",
+                            "lectureId", lectureId,
+                            "message", "Subscribe to /topic/lectures/" + lectureId
+                                    + "/qa for real-time answer chunks."));
+
+        } catch (Exception e) {
+            log.error("Failed to start streaming Q&A for lectureId={}: {}", lectureId, e.getMessage(), e);
+            return ResponseEntity
+                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to start streaming Q&A. Please try again."));
+        }
+    }
 }
