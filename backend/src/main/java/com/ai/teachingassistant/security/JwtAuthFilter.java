@@ -41,7 +41,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         final String authHeader = request.getHeader("Authorization");
 
-        // Skip if no Bearer token present
+        // Skip if no Bearer token present — let Spring Security handle unauthenticated access
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             filterChain.doFilter(request, response);
             return;
@@ -53,15 +53,19 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         try {
             email = jwtUtil.extractUsername(jwt);
         } catch (Exception e) {
-            log.warn("Failed to extract username from JWT: {}", e.getMessage());
-            filterChain.doFilter(request, response);
+            log.warn("JWT parse error: {}", e.getMessage());
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\": \"Invalid or expired token: " + e.getMessage() + "\"}");
             return;
         }
 
         // Reject blacklisted tokens (logged-out sessions)
         if (tokenBlacklistService.isBlacklisted(jwt)) {
             log.warn("Rejected blacklisted token for user: {}", email);
-            filterChain.doFilter(request, response);
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\": \"Token has been invalidated. Please log in again.\"}");
             return;
         }
 
@@ -76,7 +80,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                         userDetails.getAuthorities());
                 authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(authToken);
-                log.debug("Authenticated user: {}", email);
+                log.debug("Authenticated user: {} with role: {}", email, userDetails.getAuthorities());
+            } else {
+                log.warn("Token validation failed for user: {} — valid={}, isAccessToken={}",
+                        email, jwtUtil.isTokenValid(jwt, userDetails), jwtUtil.isAccessToken(jwt));
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.setContentType("application/json");
+                response.getWriter().write("{\"error\": \"Token is invalid or is not an access token.\"}");
+                return;
             }
         }
 

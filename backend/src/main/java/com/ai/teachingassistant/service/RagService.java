@@ -56,6 +56,7 @@ public class RagService {
         private final WebClient ollamaWebClient;
         private final SimpMessagingTemplate messagingTemplate;
         private final ObjectMapper objectMapper;
+        private final StreamCancellationService cancellationService;
 
         @Value("${ollama.model:llama3.2}")
         private String ollamaModel;
@@ -221,6 +222,9 @@ public class RagService {
                 log.info("Streaming RAG Q&A: lectureId={}, question='{}'", lectureId, question);
                 String destination = QA_TOPIC_PREFIX + lectureId + "/qa";
 
+                // Clear any previous cancellation
+                cancellationService.clearCancellation(lectureId);
+
                 try {
                         // ── Step 1: retrieve the most relevant chunks ────────────────
                         var b = new FilterExpressionBuilder();
@@ -286,6 +290,7 @@ public class RagService {
                                         .bodyToFlux(String.class);
 
                         chunkFlux
+                                        .takeWhile(line -> !cancellationService.isCancelled(lectureId))
                                         .doOnNext(line -> {
                                                 try {
                                                         JsonNode node = objectMapper.readTree(line);
@@ -308,6 +313,14 @@ public class RagService {
                                                 streamError.set(error);
                                         })
                                         .blockLast(); // safe — running on dedicated @Async thread
+
+                        // If cancelled, append a stop notice
+                        if (cancellationService.isCancelled(lectureId)) {
+                                log.info("Q&A streaming CANCELLED by user for lectureId={}", lectureId);
+                                messagingTemplate.convertAndSend(destination,
+                                                QaStreamMessage.chunk(lectureId,
+                                                                "\n\n*[Generation stopped by user]*"));
+                        }
 
                         // ── Step 4: handle errors / send completion ───────────────────
                         if (streamError.get() != null) {

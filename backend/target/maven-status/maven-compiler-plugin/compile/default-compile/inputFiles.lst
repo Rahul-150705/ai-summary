@@ -14,6 +14,7 @@ C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\j
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\security\JwtAuthFilter.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\dto\QuizSubmitResponse.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\config\AsyncConfig.java
+C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\service\StreamCancellationService.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\dto\LectureRequest.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\TeachingAssistantApplication.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\auth\RefreshTokenRequest.java

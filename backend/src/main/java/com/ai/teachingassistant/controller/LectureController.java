@@ -7,6 +7,7 @@ import com.ai.teachingassistant.model.Lecture;
 import com.ai.teachingassistant.model.QuizAttempt;
 import com.ai.teachingassistant.repository.QuizAttemptRepository;
 import com.ai.teachingassistant.service.LectureService;
+import com.ai.teachingassistant.service.StreamCancellationService;
 import com.ai.teachingassistant.service.StreamingSummarizationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,6 +40,7 @@ public class LectureController {
     private final LectureService lectureService;
     private final QuizAttemptRepository quizAttemptRepository;
     private final StreamingSummarizationService streamingSummarizationService;
+    private final StreamCancellationService streamCancellationService;
 
     @Value("${llm.provider:openai}")
     private String activeProvider;
@@ -364,6 +366,37 @@ public class LectureController {
                         "status", "streaming_started",
                         "lectureId", id,
                         "message", "Subscribe to /topic/lectures/" + id + " for real-time chunks."));
+    }
+
+    // ── POST /api/lecture/{id}/stop-stream ─────────────────────────────────
+
+    /**
+     * Stops an active AI streaming session (summary or Q&A) for a lecture.
+     *
+     * <p>
+     * When the user clicks "Stop" in the UI, this endpoint sets a cancellation
+     * flag. The streaming service checks this flag on every token and stops
+     * gracefully, sending a SUMMARY_COMPLETED or ANSWER_COMPLETED with whatever
+     * has been generated so far.
+     * </p>
+     */
+    @PostMapping("/{id}/stop-stream")
+    public ResponseEntity<Map<String, String>> stopStream(
+            @PathVariable String id,
+            Principal principal) {
+
+        if (principal == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", "Not authenticated"));
+        }
+
+        log.info("Stop-stream request for lectureId={} by user={}", id, principal.getName());
+        streamCancellationService.cancel(id);
+
+        return ResponseEntity.ok(Map.of(
+                "status", "cancelled",
+                "lectureId", id,
+                "message", "Stream cancellation requested."));
     }
 
     // ── GET /api/lecture/health ───────────────────────────────────────────

@@ -10,8 +10,18 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * Data Transfer Object for AI-generated lecture summaries returned to the
- * frontend.
+ * Data Transfer Object for AI-generated PDF summaries returned to the frontend.
+ *
+ * <p>Sections map 1:1 to the LLM prompt markers:</p>
+ * <pre>
+ * [MAIN_TOPIC]         → mainTopic
+ * [KEY_POINTS]          → keyPoints
+ * [IMPORTANT_DETAILS]   → importantDetails
+ * [STRUCTURE_OVERVIEW]  → structureOverview
+ * [CONCLUSIONS]         → conclusions
+ * [NOTABLE_QUOTES]      → notableQuotes
+ * [ADDITIONAL_NOTES]    → additionalNotes
+ * </pre>
  */
 @Data
 @Builder
@@ -25,28 +35,34 @@ public class SummaryResponse {
      */
     private String lectureId;
 
-    /** High-level title of the summarised lecture. */
+    /** Descriptive title of the document. */
     private String title;
 
-    /** 3-5 sentence overview paragraph about the lecture. */
-    private String overview;
+    /** Main Topic & Purpose — what the document is about and its goal. */
+    private String mainTopic;
 
-    /** Bullet-point key concepts (full sentences). */
+    /** Key Points & Arguments — major points, findings, or arguments. */
     @JsonProperty("keyPoints")
     private List<String> keyPoints;
 
-    /** Important definitions extracted from the lecture. */
-    private List<String> definitions;
+    /** Important Details — specific data, statistics, dates, names, or figures. */
+    @JsonProperty("importantDetails")
+    private List<String> importantDetails;
 
-    /** Rich multi-paragraph detailed explanation. */
-    private String detailedExplanation;
+    /** Structure Overview — how the document is organized (sections, chapters, etc.). */
+    private String structureOverview;
 
-    /** Exam-focused takeaways (full actionable statements). */
-    @JsonProperty("examPoints")
-    private List<String> examPoints;
+    /** Conclusions & Recommendations — final conclusions or action items. */
+    @JsonProperty("conclusions")
+    private List<String> conclusions;
 
-    /** Suggested further reading / resources. */
-    private List<String> furtherReading;
+    /** Notable Quotes — critical or standout statements from the document. */
+    @JsonProperty("notableQuotes")
+    private List<String> notableQuotes;
+
+    /** Additional Notes — anything unusual, important, or easily overlooked. */
+    @JsonProperty("additionalNotes")
+    private List<String> additionalNotes;
 
     /**
      * Pre-built Markdown string combining all sections above.

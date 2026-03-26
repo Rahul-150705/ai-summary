@@ -90,16 +90,22 @@ public class LectureService {
             log.info("Cache HIT for hash={} (file='{}') — skipping LLM call. elapsed={}ms",
                     contentHash, fileName, System.currentTimeMillis() - startTime);
 
-            // Claim orphaned lectures (uploaded before auth existed)
-            claimIfOrphaned(cachedLecture, userId);
+            // If the cached lecture belongs to someone else, clone it for this user
+            if (userId != null && cachedLecture.getUserId() != null
+                    && !userId.equals(cachedLecture.getUserId())) {
+                log.info("Cache HIT owned by different user — cloning lecture for user={}", userId);
+                cachedLecture = cloneForUser(cachedLecture, userId, fileName);
+            } else {
+                // Claim orphaned lectures (uploaded before auth existed)
+                claimIfOrphaned(cachedLecture, userId);
+            }
 
             SummaryResponse cachedResponse = deserializeFromJson(cachedLecture.getSummary());
             cachedResponse.setLectureId(cachedLecture.getId());
             cachedResponse.setFromCache(true);
             cachedResponse.setFileName(fileName);
 
-            // Re-index if vectors may be missing (e.g. embedding model wasn't
-            // available during the original upload)
+            // Re-index if vectors may be missing
             tryReindexIfNeeded(cachedLecture);
 
             return cachedResponse;
@@ -212,11 +218,15 @@ public class LectureService {
             Lecture c = cached.get();
             log.info("Smart-process cache HIT for hash={}, reusing lectureId={}", contentHash, c.getId());
 
-            // Claim orphaned lectures (uploaded before auth existed)
-            claimIfOrphaned(c, userId);
+            // If the cached lecture belongs to someone else, clone it for this user
+            if (userId != null && c.getUserId() != null && !userId.equals(c.getUserId())) {
+                log.info("Smart-process cache HIT owned by different user — cloning for user={}", userId);
+                c = cloneForUser(c, userId, fileName);
+            } else {
+                claimIfOrphaned(c, userId);
+            }
 
-            // Re-index vectors — they may be missing if the embedding model
-            // wasn't available during the original upload
+            // Re-index vectors — they may be missing
             int chunksIndexed = tryReindexIfNeeded(c);
 
             return com.ai.teachingassistant.dto.ProcessResponse.builder()
@@ -448,6 +458,29 @@ public class LectureService {
             lectureRepository.save(lecture);
             log.info("Claimed orphaned lecture {} for user={}", lecture.getId(), userId);
         }
+    }
+
+    /**
+     * Creates a new Lecture record for the given user, cloned from an existing
+     * cached lecture. This lets multiple users benefit from the same PDF extraction
+     * and summary without sharing a single owner-locked record.
+     */
+    private Lecture cloneForUser(Lecture source, String userId, String fileName) {
+        Lecture clone = Lecture.builder()
+                .id(UUID.randomUUID().toString())
+                .fileName(fileName)
+                .originalText(source.getOriginalText())
+                .summary(source.getSummary())
+                .provider(source.getProvider())
+                .fileSizeBytes(source.getFileSizeBytes())
+                .pageCount(source.getPageCount())
+                .processedAt(LocalDateTime.now())
+                .userId(userId)
+                .contentHash(source.getContentHash())
+                .build();
+        lectureRepository.save(clone);
+        log.info("Cloned lecture {} -> {} for user={}", source.getId(), clone.getId(), userId);
+        return clone;
     }
 
     /**
