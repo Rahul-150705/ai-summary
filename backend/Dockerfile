@@ -18,4 +18,4 @@ COPY --from=builder /app/target/teaching-assistant-1.0.0.jar app.jar
 # Render injects $PORT automatically
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-Xms512m", "-Xmx1g", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-Xms256m", "-Xmx400m", "-jar", "app.jar"]
