@@ -301,16 +301,17 @@ public class LectureController {
      * Call this when Q&A returns "couldn't find relevant content" for a lecture
      * that was uploaded before the embedding model was available.
      */
-    @PostMapping("/{id}/reindex")
+    @PostMapping(value = "/{id}/reindex", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, String>> reindexLecture(
             @PathVariable String id,
+            @RequestParam("file") MultipartFile file,
             Principal principal) {
         String userId = principal.getName();
         log.info("Re-index request for lecture id={} by user={}", id, userId);
-        lectureService.reindexLecture(id, userId);
+        lectureService.reindexLectureWithFile(id, file, userId);
         return ResponseEntity.ok(Map.of(
                 "status", "success",
-                "message", "Lecture re-indexed successfully. Q&A is now available."));
+                "message", "Lecture re-indexed successfully. AI knowledge base is now active."));
     }
 
     // ── POST /api/lecture/{id}/summarize-stream ────────────────────────────

@@ -223,8 +223,15 @@ public class LectureService {
                 claimIfOrphaned(c, userId);
             }
 
-            // Re-index vectors — they may be missing
-            int chunksIndexed = tryReindexIfNeeded(c);
+            // Fix Bug #3 — re-index if needed (case: cache hit)
+            // Even if the lecture is cached, the vectors might be missing or under a different ID.
+            // We call indexPdf here with the current file to be 100% sure the AI knows the content.
+            try {
+                log.info("Smart-process cache hit: re-indexing for lectureId={}...", c.getId());
+                pythonRagClient.indexPdf(c.getId(), file).block();
+            } catch (Exception e) {
+                log.warn("Smart-process: Re-index on cache hit failed for lectureId={}: {}", c.getId(), e.getMessage());
+            }
 
             return com.ai.teachingassistant.dto.ProcessResponse.builder()
                     .lectureId(c.getId())
@@ -232,7 +239,7 @@ public class LectureService {
                     .status("indexing_complete")
                     .fileName(fileName)
                     .pageCount(c.getPageCount())
-                    .chunksIndexed(chunksIndexed)
+                    .chunksIndexed(-1)
                     .build();
         }
 
@@ -353,13 +360,13 @@ public class LectureService {
         lectureRepository.save(lecture);
         log.info("Quick-index lecture saved: id={}, pages={}", lecture.getId(), pageCount);
 
-        // Index in Python microservice (Synchronous to ensure documents table is populated)
+        // Fix Bug #1 — Index in Python microservice using lecture.getId() (Synchronous)
         try {
-            log.info("Quick-index: Triggering RAG indexing for hash={}...", contentHash);
-            pythonRagClient.indexPdf(contentHash, file).block();
-            log.info("Quick-index: RAG indexing complete for hash={}", contentHash);
+            log.info("Quick-index: Triggering RAG indexing for lectureId={}...", lecture.getId());
+            pythonRagClient.indexPdf(lecture.getId(), file).block();
+            log.info("Quick-index: RAG indexing complete for lectureId={}", lecture.getId());
         } catch (Exception e) {
-            log.error("Quick-index: Advanced RAG indexing failed for hash={}: {}", contentHash, e.getMessage());
+            log.error("Quick-index: Advanced RAG indexing failed for lectureId={}: {}", lecture.getId(), e.getMessage());
         }
 
         log.info("Quick-index complete: id={}, elapsed={}ms",
@@ -430,9 +437,15 @@ public class LectureService {
      *
      * @throws ResponseStatusException 404 if not found, 403 if wrong owner.
      */
-    public void reindexLecture(String lectureId, String userId) {
-        throw new UnsupportedOperationException("Text-only re-indexing is deprecated. "
-                + "Please use /api/advanced-rag/index with the original PDF.");
+    // Fix Bug #4 — Working re-index endpoint that takes the original PDF file
+    public void reindexLectureWithFile(String lectureId, MultipartFile file, String userId) {
+        // 1. Verify Ownership
+        getLectureById(lectureId, userId);
+        
+        // 2. Trigger Python Indexing
+        log.info("Manual re-index: Triggering RAG indexing for lectureId={}...", lectureId);
+        pythonRagClient.indexPdf(lectureId, file).block();
+        log.info("Manual re-index: RAG indexing complete for lectureId={}", lectureId);
     }
 
     // ── Ownership & re-indexing helpers ────────────────────────────────────

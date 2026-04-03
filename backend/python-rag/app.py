@@ -112,6 +112,7 @@ async def add_document(lecture_id: str = Form(...), file: UploadFile = File(...)
                         (chunk, embedding.tolist(), json.dumps({"lecture_id": lecture_id}))
                     )
                 conn.commit()
+                print(f"RAG Indexing: Successfully saved {len(chunks)} chunks for lectureId={lecture_id}")
 
         return {"message": "Success (indexed new chunks)", "chunks_indexed": len(chunks)}
     except Exception as e:
