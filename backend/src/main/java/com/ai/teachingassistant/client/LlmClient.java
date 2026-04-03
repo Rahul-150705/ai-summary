@@ -51,10 +51,10 @@ public class LlmClient {
     @Value("${gemini.api.url:https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent}")
     private String geminiApiUrl;
     // Ollama (local - free, no API key needed)
-    @Value("${ollama.api.url:http://localhost:11434/api/generate}")
+    @Value("${ollama.api.url:http://127.0.0.1:11434/api/generate}")
     private String ollamaApiUrl;
 
-    @Value("${ollama.model:llama3.2}")
+    @Value("${ollama.model:phi3:latest}")
     private String ollamaModel;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient httpClient = HttpClient.newBuilder()
