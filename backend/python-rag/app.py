@@ -80,19 +80,7 @@ async def add_document(lecture_id: str = Form(...), file: UploadFile = File(...)
     4. Store in Neon (pgvector)
     """
     try:
-        # Step 1: Duplicate Check (Cache HIT)
-        with get_db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM documents WHERE metadata->>'lecture_id' = %s",
-                    (lecture_id,)
-                )
-                count = cur.fetchone()[0]
-                if count > 0:
-                    print(f"Cache HIT: lecture_id={lecture_id} already has {count} chunks in pgvector.")
-                    return {"message": "Already indexed (using cache)", "chunks_indexed": count}
-
-        # Step 2: Cache MISS — Extract PDF
+        # Step 2: Extract PDF
         content = await file.read()
         pdf_doc = fitz.open(stream=io.BytesIO(content), filetype="pdf")
         full_text = ""
@@ -106,6 +94,15 @@ async def add_document(lecture_id: str = Form(...), file: UploadFile = File(...)
 
         with get_db_conn() as conn:
             with conn.cursor() as cur:
+                # DELETE stale data first — ensures clean re-index every time
+                cur.execute(
+                    "DELETE FROM documents WHERE metadata->>'lecture_id' = %s",
+                    (lecture_id,)
+                )
+                deleted = cur.rowcount
+                if deleted > 0:
+                    print(f"Deleted {deleted} stale chunks for lecture_id={lecture_id}")
+
                 for chunk, embedding in zip(chunks, embeddings):
                     cur.execute(
                         "INSERT INTO documents (content, embedding, metadata) VALUES (%s, %s::vector, %s)",
@@ -155,19 +152,21 @@ async def query_rag(request: QueryRequest):
         ranked_chunks = [chunk for _, chunk in sorted(zip(scores, retrieved_chunks), key=lambda x: x[0], reverse=True)]
         top_3_chunks = ranked_chunks[:RERANK_TOP_K]
 
-        # Step 4: Call Ollama
+        # Step 4: LLM Generation with Teaching Assistant Prompt
         context = "\n\n---\n\n".join(top_3_chunks)
-        prompt = f"""Use the following pieces of context to answer the student's question. 
-If you don't know the answer based on the context, just say 'I don't know'. 
-Do not make up facts.
+        prompt = f"""You are an expert teaching assistant helping a student understand their lecture material.
 
-CONTEXT:
+Use ONLY the context below to answer the question. Be specific and educational.
+If the answer is not in the context, say "This topic isn't covered in the provided lecture material."
+Do not make up facts. Do not use outside knowledge.
+
+LECTURE CONTEXT:
 {context}
 
-QUESTION:
+STUDENT QUESTION:
 {request.question}
 
-ANSWER:"""
+ANSWER (be clear, specific, and explain concepts thoroughly):"""
 
         ollama_response = requests.post(
             f"{OLLAMA_URL}/api/generate",
@@ -187,6 +186,48 @@ ANSWER:"""
 
     except Exception as e:
         print(f"Error in /query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/quiz-context")
+async def get_quiz_context(request: QueryRequest):
+    """
+    Returns top 8 most relevant chunks for quiz generation.
+    No Ollama call — just retrieval + reranking.
+    """
+    try:
+        # Use a broad query to find key educational content
+        query_emb = embedding_model.encode(
+            "main topics key concepts important facts definitions"
+        )
+
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                # Retrieve slightly more for reranking
+                cur.execute(
+                    "SELECT content FROM documents WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
+                    (request.lecture_id, query_emb.tolist(), 15)
+                )
+                retrieved_chunks = [row[0] for row in cur.fetchall()]
+
+        if not retrieved_chunks:
+            return {"chunks": [], "context": ""}
+
+        # Rerank with a broad educational query to get the best 8
+        pairs = [["important concepts facts definitions examples", chunk] 
+                 for chunk in retrieved_chunks]
+        scores = reranker_model.predict(pairs)
+        ranked = [chunk for _, chunk in sorted(
+            zip(scores, retrieved_chunks), key=lambda x: x[0], reverse=True
+        )]
+        top_chunks = ranked[:8]  # Top 8 for broad quiz coverage
+        
+        return {
+            "chunks": top_chunks,
+            "context": "\n\n---\n\n".join(top_chunks)
+        }
+
+    except Exception as e:
+        print(f"Error in /quiz-context: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

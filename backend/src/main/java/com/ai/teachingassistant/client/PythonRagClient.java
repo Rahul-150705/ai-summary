@@ -68,6 +68,26 @@ public class PythonRagClient {
                 .bodyToMono(QueryResponse.class);
     }
 
+    /**
+     * Calls Python service for Vector Search -> Reranking for Quiz Generation Context.
+     */
+    public Mono<QuizContextResponse> getQuizContext(String lectureId) {
+        log.info("Fetching quiz context from Python for lectureId={}", lectureId);
+
+        QueryRequest request = QueryRequest.builder()
+                .question("main topics key concepts important facts definitions")
+                .lectureId(lectureId)
+                .build();
+
+        return webClient.post()
+                .uri("/quiz-context")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(QuizContextResponse.class)
+                .doOnError(err -> log.error("Quiz context fetch failed: {}", err.getMessage()));
+    }
+
     // --- DTOs ---
 
     @Data
@@ -81,5 +101,11 @@ public class PythonRagClient {
     public static class QueryResponse {
         private String answer;
         private List<String> chunks;
+    }
+
+    @Data
+    public static class QuizContextResponse {
+        private List<String> chunks;
+        private String context;
     }
 }

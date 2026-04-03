@@ -48,7 +48,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/lecture/health").permitAll()
                         .requestMatchers("/ws/**").permitAll() // WebSocket handshake (SockJS)
                         .requestMatchers("/api/lecture/**").authenticated()
-                        .requestMatchers("/api/advanced-rag/**").permitAll()
+                        .requestMatchers("/api/advanced-rag/**").authenticated()
                         .requestMatchers("/api/quiz/**").authenticated()
                         .anyRequest().authenticated())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

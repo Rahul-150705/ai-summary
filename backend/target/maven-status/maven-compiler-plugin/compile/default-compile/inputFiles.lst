@@ -23,6 +23,7 @@ C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\j
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\client\PythonRagClient.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\dto\QuizQuestion.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\service\SummarizationService.java
+C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\controller\QaController.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\service\PdfExtractionService.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\dto\LectureHistoryResponse.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\service\QuizService.java

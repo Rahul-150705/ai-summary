@@ -2,6 +2,7 @@ com\ai\teachingassistant\dto\QuizResponse$QuizResponseBuilder.class
 com\ai\teachingassistant\dto\UserStatsResponse$QuizAttemptSummary.class
 com\ai\teachingassistant\security\JwtAuthFilter.class
 com\ai\teachingassistant\client\PythonRagClient$QueryRequest.class
+com\ai\teachingassistant\controller\QaController.class
 com\ai\teachingassistant\dto\QuickIndexResponse$QuickIndexResponseBuilder.class
 com\ai\teachingassistant\config\AsyncConfig.class
 com\ai\teachingassistant\dto\QaStreamMessage.class
@@ -33,6 +34,7 @@ com\ai\teachingassistant\dto\QuickIndexResponse.class
 com\ai\teachingassistant\dto\QuizQuestion$QuizQuestionBuilder.class
 com\ai\teachingassistant\security\JwtUtil.class
 com\ai\teachingassistant\auth\AuthController.class
+com\ai\teachingassistant\client\PythonRagClient$QuizContextResponse.class
 com\ai\teachingassistant\dto\AskQuestionResponse$AskQuestionResponseBuilder.class
 com\ai\teachingassistant\dto\QuizSubmitResponse$QuizSubmitResponseBuilder.class
 com\ai\teachingassistant\dto\UserStatsResponse.class

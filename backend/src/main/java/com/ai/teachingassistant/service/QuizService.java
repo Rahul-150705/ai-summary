@@ -1,5 +1,7 @@
 package com.ai.teachingassistant.service;
 
+import com.ai.teachingassistant.client.PythonRagClient;
+
 import com.ai.teachingassistant.client.LlmClient;
 import com.ai.teachingassistant.dto.QuizQuestion;
 import com.ai.teachingassistant.dto.QuizResponse;
@@ -30,6 +32,7 @@ public class QuizService {
 
     private final LlmClient llmClient;
     private final LectureRepository lectureRepository;
+    private final PythonRagClient pythonRagClient;
 
     // ── Generate Quiz ────────────────────────────────────────────────────────
 
@@ -40,7 +43,6 @@ public class QuizService {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Lecture not found: " + lectureId));
 
-        // Ownership check
         if (userId != null && !userId.equals(lecture.getUserId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "Access denied to lecture: " + lectureId);
@@ -48,7 +50,32 @@ public class QuizService {
 
         log.info("Generating {} quiz questions for lecture: {}", numQuestions, lectureId);
 
-        String prompt = buildQuizPrompt(lecture.getOriginalText(), numQuestions);
+        // ── Try RAG context first ────────────────────────────────────────
+        String contextText = null;
+        try {
+            PythonRagClient.QuizContextResponse ragContext =
+                    pythonRagClient.getQuizContext(lectureId).block();
+
+            if (ragContext != null && ragContext.getContext() != null
+                    && !ragContext.getContext().isBlank()) {
+                contextText = ragContext.getContext();
+                log.info("Using RAG context ({} chars, {} chunks) for quiz generation",
+                        contextText.length(), ragContext.getChunks().size());
+            }
+        } catch (Exception e) {
+            log.warn("RAG context fetch failed, falling back to originalText: {}", e.getMessage());
+        }
+
+        // ── Fallback to originalText if RAG fails ───────────────────────
+        if (contextText == null || contextText.isBlank()) {
+            String originalText = lecture.getOriginalText();
+            contextText = originalText != null
+                    ? originalText.substring(0, Math.min(12000, originalText.length()))
+                    : "";
+            log.info("Fallback: using originalText ({} chars) for quiz", contextText.length());
+        }
+
+        String prompt = buildQuizPrompt(contextText, numQuestions);
         String rawResponse = llmClient.sendPrompt(prompt);
 
         if (rawResponse == null || rawResponse.isBlank()) {
@@ -58,7 +85,7 @@ public class QuizService {
         List<QuizQuestion> questions = parseQuizResponse(rawResponse);
 
         if (questions.isEmpty()) {
-            throw new IOException("Could not parse any quiz questions from the AI response. Please try again.");
+            throw new IOException("Could not parse quiz questions from AI response. Please try again.");
         }
 
         log.info("Generated {} questions for lecture: {}", questions.size(), lectureId);
@@ -125,40 +152,40 @@ public class QuizService {
 
     // ── Prompt Builder ───────────────────────────────────────────────────────
 
-    private String buildQuizPrompt(String lectureText, int numQuestions) {
-        String truncated = lectureText.length() > 10000
-                ? lectureText.substring(0, 10000) + "\n\n[... content truncated ...]"
-                : lectureText;
-
+    private String buildQuizPrompt(String contextText, int numQuestions) {
         return """
                 You are an expert university professor creating a multiple-choice quiz.
-                Based on the lecture content below, generate exactly %d quiz questions.
+                Based ONLY on the lecture content below, generate exactly %d quiz questions.
+                Cover different topics and concepts from throughout the content — do not focus on just one section.
 
                 STRICT FORMAT — follow this EXACTLY for each question (no deviations):
 
                 QUESTION 1
-                <Write the question here>
+                <Write a clear, specific question testing understanding of a concept>
                 A) <Option A>
                 B) <Option B>
                 C) <Option C>
                 D) <Option D>
                 CORRECT: <A or B or C or D>
-                EXPLANATION: <One sentence explaining why the answer is correct>
+                EXPLANATION: <One sentence explaining why the answer is correct, referencing the lecture content>
 
                 QUESTION 2
                 ...and so on until QUESTION %d.
 
                 Rules:
-                - Questions must be based ONLY on the lecture content.
+                - Questions must be based ONLY on the lecture content below.
+                - Test UNDERSTANDING, not just memorization.
                 - Each question must have exactly 4 options (A, B, C, D).
+                - Wrong options must be plausible but clearly incorrect based on the content.
                 - The CORRECT line must contain only a single letter: A, B, C, or D.
-                - EXPLANATION must be one concise sentence.
+                - EXPLANATION must reference specific content from the lecture.
+                - Spread questions across different sections/topics in the content.
                 - Do NOT add any text outside this format.
 
                 --- LECTURE CONTENT ---
                 %s
                 --- END ---
-                """.formatted(numQuestions, numQuestions, truncated);
+                """.formatted(numQuestions, numQuestions, contextText);
     }
 
     // ── Response Parser ──────────────────────────────────────────────────────
