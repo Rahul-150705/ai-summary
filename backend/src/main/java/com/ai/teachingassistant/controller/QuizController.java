@@ -14,10 +14,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import com.ai.teachingassistant.model.Lecture;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @RestController
@@ -29,8 +32,7 @@ public class QuizController {
     private final QuizAttemptRepository quizAttemptRepository;
     private final LectureRepository lectureRepository;
 
-    /** In-memory cache: lectureId → generated questions for answer grading */
-    private final ConcurrentHashMap<String, List<QuizQuestion>> quizCache = new ConcurrentHashMap<>();
+    // Removed ConcurrentHashMap since we now store in DB
 
     // ── POST /api/quiz/{lectureId}/generate ──────────────────────────────────
 
@@ -49,7 +51,14 @@ public class QuizController {
 
         try {
             QuizResponse quiz = quizService.generateQuiz(lectureId, userId, numQuestions);
-            quizCache.put(lectureId, quiz.getQuestions());
+            
+            Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
+            if (lecture != null) {
+                ObjectMapper mapper = new ObjectMapper();
+                lecture.setQuizData(mapper.writeValueAsString(quiz.getQuestions()));
+                lectureRepository.save(lecture);
+            }
+            
             return ResponseEntity.ok(quiz);
         } catch (Exception e) {
             log.error("Quiz generation failed for lectureId={}: {}", lectureId, e.getMessage(), e);
@@ -66,7 +75,16 @@ public class QuizController {
             @RequestBody QuizSubmitRequest submitRequest,
             Principal principal) {
 
-        List<QuizQuestion> questions = quizCache.get(lectureId);
+        List<QuizQuestion> questions = null;
+        try {
+            Lecture lecture = lectureRepository.findById(lectureId).orElse(null);
+            if (lecture != null && lecture.getQuizData() != null) {
+                ObjectMapper mapper = new ObjectMapper();
+                questions = mapper.readValue(lecture.getQuizData(), new TypeReference<List<QuizQuestion>>() {});
+            }
+        } catch (Exception e) {
+            log.warn("Failed to retrieve quiz questions from DB for lectureId={}", lectureId, e);
+        }
 
         if (questions == null || questions.isEmpty()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)

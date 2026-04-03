@@ -107,7 +107,7 @@ public class LectureService {
             cachedResponse.setFileName(fileName);
 
             // Re-index if vectors may be missing
-            tryReindexIfNeeded(cachedLecture);
+            tryReindexIfNeeded(cachedLecture, file);
 
             return cachedResponse;
         }
@@ -264,9 +264,11 @@ public class LectureService {
         log.info("Smart-process lecture saved: id={}, pages={}", lecture.getId(), pageCount);
 
         // Index in Python microservice (Synchronous to ensure documents table is populated)
+        boolean ragIndexed = false;
         try {
             log.info("Smart-process: Triggering RAG indexing for lectureId={}...", lecture.getId());
             pythonRagClient.indexPdf(lecture.getId(), file).block();
+            ragIndexed = true;
             log.info("Smart-process: RAG indexing complete for lectureId={}", lecture.getId());
         } catch (Exception e) {
             log.error("Smart-process indexing failed for lectureId={}: {}", lecture.getId(), e.getMessage());
@@ -283,7 +285,7 @@ public class LectureService {
         return com.ai.teachingassistant.dto.ProcessResponse.builder()
                 .lectureId(lecture.getId())
                 .mode(mode)
-                .status("indexing_complete")
+                .status(ragIndexed ? "indexing_complete" : "indexing_failed")
                 .fileName(fileName)
                 .pageCount(pageCount)
                 .chunksIndexed(-1)
@@ -328,7 +330,7 @@ public class LectureService {
             claimIfOrphaned(c, userId);
 
             // Re-index if needed
-            int chunksIndexed = tryReindexIfNeeded(c);
+            int chunksIndexed = tryReindexIfNeeded(c, file);
 
             return com.ai.teachingassistant.dto.QuickIndexResponse.builder()
                     .lectureId(c.getId())
@@ -490,12 +492,19 @@ public class LectureService {
      */
     /**
      * Attempts to trigger a re-index. Note: Python RAG expects the File.
-     * Since we only have the text in an orphaned lecture, we skip auto-reindex for now.
      */
-    private int tryReindexIfNeeded(Lecture lecture) {
-        log.info("Advanced RAG: Skipping automatic text-based re-index for lectureId={}. "
-                + "Upload the PDF again to refresh the vector store if needed.", lecture.getId());
-        return 0;
+    private int tryReindexIfNeeded(Lecture lecture, MultipartFile file) {
+        if (file == null) {
+            return 0;
+        }
+        try {
+            log.info("Advanced RAG: Re-indexing for lectureId={}...", lecture.getId());
+            pythonRagClient.indexPdf(lecture.getId(), file).block();
+            return 1;
+        } catch (Exception e) {
+            log.error("Re-index failed for lectureId={}: {}", lecture.getId(), e.getMessage());
+            return 0;
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

@@ -42,7 +42,7 @@ public class LlmClient {
     private String claudeApiKey;
     @Value("${claude.api.url:https://api.anthropic.com/v1/messages}")
     private String claudeApiUrl;
-    @Value("${claude.model:claude-sonnet-4-6}")
+    @Value("${claude.model:claude-sonnet-4-6-20250514}")
     private String claudeModel;
 
     // Gemini

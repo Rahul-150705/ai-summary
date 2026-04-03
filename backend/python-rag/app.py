@@ -230,6 +230,21 @@ async def get_quiz_context(request: QueryRequest):
         print(f"Error in /quiz-context: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/debug/{lecture_id}")
+async def debug(lecture_id: str):
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM documents WHERE metadata->>'lecture_id' = %s",
+                    (lecture_id,)
+                )
+                count = cur.fetchone()[0]
+        return {"lecture_id": lecture_id, "chunks_stored": count}
+    except Exception as e:
+        print(f"Error in /debug: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)

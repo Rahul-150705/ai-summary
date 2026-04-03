@@ -13,6 +13,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * PythonRagClient — Bridges Java Spring Boot with the Python FastAPI RAG Service.
@@ -94,6 +95,8 @@ public class PythonRagClient {
     @Builder
     public static class QueryRequest {
         private String question;
+        
+        @JsonProperty("lecture_id")
         private String lectureId;
     }
 

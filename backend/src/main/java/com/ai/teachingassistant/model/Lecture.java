@@ -55,4 +55,7 @@ public class Lecture {
      */
     @Column(length = 32)
     private String contentHash;
+
+    @Column(columnDefinition = "TEXT")
+    private String quizData;
 }
