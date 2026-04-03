@@ -43,10 +43,12 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/lecture/health").permitAll()
                         .requestMatchers("/ws/**").permitAll() // WebSocket handshake (SockJS)
                         .requestMatchers("/api/lecture/**").authenticated()
+                        .requestMatchers("/api/advanced-rag/**").permitAll()
                         .requestMatchers("/api/quiz/**").authenticated()
                         .anyRequest().authenticated())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

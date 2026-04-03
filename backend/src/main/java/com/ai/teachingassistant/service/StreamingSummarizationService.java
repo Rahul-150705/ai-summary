@@ -86,17 +86,10 @@ public class StreamingSummarizationService {
     /** Below this threshold, use single-pass (no Map-Reduce overhead). */
     private static final int SINGLE_PASS_THRESHOLD = 8000;
 
-    // ── CPU Tuning for Intel i5-1240P (12 cores / 16 logical threads, 16GB RAM) ──
-    // Leave 2 logical threads free for OS + JVM GC to avoid starvation.
-    private static final int NUM_THREADS = 14;
     // num_ctx for MAP chunks: phi3 chunk prompts are short, keep small for fast prefill.
     private static final int CTX_CHUNK   = 1024;
     // num_ctx for REDUCE phase: holds ALL chunk summaries combined.
     private static final int CTX_REDUCE  = 8192;
-    // num_batch: tokens processed per forward pass. Higher = better CPU throughput.
-    private static final int NUM_BATCH   = 512;
-    // keep_alive=-1 → model stays loaded in RAM forever (no cold-start between chunks).
-    private static final String KEEP_ALIVE = "-1";
 
     /**
      * Kicks off streaming summarization on a background thread.

@@ -1,5 +1,6 @@
 package com.ai.teachingassistant.service;
 
+import com.ai.teachingassistant.client.PythonRagClient;
 import com.ai.teachingassistant.dto.LectureHistoryResponse;
 import com.ai.teachingassistant.dto.SummaryResponse;
 import com.ai.teachingassistant.model.Lecture;
@@ -44,7 +45,7 @@ public class LectureService {
     private final SummarizationService summarizationService;
     private final LectureRepository lectureRepository;
     private final ObjectMapper objectMapper;
-    private final RagService ragService;
+    private final PythonRagClient pythonRagClient;
 
     // ── Stats helpers ─────────────────────────────────────────────────────
 
@@ -139,17 +140,13 @@ public class LectureService {
         log.info("Lecture saved: id={}, pages={}, elapsed={}ms",
                 lecture.getId(), pageCount, System.currentTimeMillis() - startTime);
 
-        // ── Step 4: index chunks into pgvector for RAG Q&A ───────────────
-        // Run after DB save so lectureId is guaranteed to exist.
-        // Cache hits above already have their vectors stored — skip them.
+        // ── Step 4: Index into Python-based Advanced RAG (Synchronous) ──
         try {
-            ragService.indexLecture(lecture.getId(), extractedText);
+            log.info("Triggering advanced RAG indexing for lectureId={}...", lecture.getId());
+            pythonRagClient.indexPdf(lecture.getId(), file).block();
+            log.info("Advanced RAG indexing complete for lectureId={}", lecture.getId());
         } catch (Exception e) {
-            // Indexing failure is non-fatal: summary is still returned correctly,
-            // but Q&A will not work for this lecture until re-indexed.
-            log.error("RAG indexing failed for lectureId={}: {}. "
-                    + "Q&A will be unavailable for this lecture.",
-                    lecture.getId(), e.getMessage(), e);
+            log.error("Advanced RAG indexing failed for lectureId={}: {}", lecture.getId(), e.getMessage());
         }
 
         response.setLectureId(lecture.getId());
@@ -259,12 +256,13 @@ public class LectureService {
         lectureRepository.save(lecture);
         log.info("Smart-process lecture saved: id={}, pages={}", lecture.getId(), pageCount);
 
-        // Index chunks synchronously — RAG Q&A works immediately after this
-        int chunksIndexed = 0;
+        // Index in Python microservice (Synchronous to ensure documents table is populated)
         try {
-            chunksIndexed = ragService.indexLectureAndCount(lecture.getId(), extractedText);
+            log.info("Smart-process: Triggering RAG indexing for lectureId={}...", lecture.getId());
+            pythonRagClient.indexPdf(lecture.getId(), file).block();
+            log.info("Smart-process: RAG indexing complete for lectureId={}", lecture.getId());
         } catch (Exception e) {
-            log.error("Smart-process indexing failed for lectureId={}: {}", lecture.getId(), e.getMessage(), e);
+            log.error("Smart-process indexing failed for lectureId={}: {}", lecture.getId(), e.getMessage());
         }
 
         // NOTE: No async summarization here — the frontend triggers streaming
@@ -281,7 +279,7 @@ public class LectureService {
                 .status("indexing_complete")
                 .fileName(fileName)
                 .pageCount(pageCount)
-                .chunksIndexed(chunksIndexed)
+                .chunksIndexed(-1)
                 .build();
     }
 
@@ -355,24 +353,23 @@ public class LectureService {
         lectureRepository.save(lecture);
         log.info("Quick-index lecture saved: id={}, pages={}", lecture.getId(), pageCount);
 
-        // ── Step 4: index into pgvector ──────────────────────────────────
-        int chunksIndexed = 0;
+        // Index in Python microservice (Synchronous to ensure documents table is populated)
         try {
-            chunksIndexed = ragService.indexLectureAndCount(lecture.getId(), extractedText);
+            log.info("Quick-index: Triggering RAG indexing for hash={}...", contentHash);
+            pythonRagClient.indexPdf(contentHash, file).block();
+            log.info("Quick-index: RAG indexing complete for hash={}", contentHash);
         } catch (Exception e) {
-            log.error("Quick-index: RAG indexing failed for lectureId={}: {}",
-                    lecture.getId(), e.getMessage(), e);
-            // Non-fatal: lecture is saved, can be re-indexed later
+            log.error("Quick-index: Advanced RAG indexing failed for hash={}: {}", contentHash, e.getMessage());
         }
 
-        log.info("Quick-index complete: id={}, chunks={}, elapsed={}ms",
-                lecture.getId(), chunksIndexed, System.currentTimeMillis() - startTime);
+        log.info("Quick-index complete: id={}, elapsed={}ms",
+                lecture.getId(), System.currentTimeMillis() - startTime);
 
         return com.ai.teachingassistant.dto.QuickIndexResponse.builder()
                 .lectureId(lecture.getId())
                 .fileName(fileName)
                 .pageCount(pageCount)
-                .chunksIndexed(chunksIndexed)
+                .chunksIndexed(-1)
                 .mode("quick_index")
                 .build();
     }
@@ -434,17 +431,8 @@ public class LectureService {
      * @throws ResponseStatusException 404 if not found, 403 if wrong owner.
      */
     public void reindexLecture(String lectureId, String userId) {
-        Lecture lecture = getLectureById(lectureId, userId);
-
-        if (lecture.getOriginalText() == null || lecture.getOriginalText().isBlank()) {
-            throw new ResponseStatusException(
-                    HttpStatus.UNPROCESSABLE_ENTITY,
-                    "No stored text available for lecture: " + lectureId);
-        }
-
-        log.info("Re-indexing lecture: id={}, user={}", lectureId, userId);
-        ragService.indexLecture(lectureId, lecture.getOriginalText());
-        log.info("Re-indexing complete for lectureId={}", lectureId);
+        throw new UnsupportedOperationException("Text-only re-indexing is deprecated. "
+                + "Please use /api/advanced-rag/index with the original PDF.");
     }
 
     // ── Ownership & re-indexing helpers ────────────────────────────────────
@@ -487,19 +475,14 @@ public class LectureService {
      * Re-indexes a lecture's text into the vector store if it has stored text.
      * Returns the number of chunks indexed (0 if skipped or failed).
      */
+    /**
+     * Attempts to trigger a re-index. Note: Python RAG expects the File.
+     * Since we only have the text in an orphaned lecture, we skip auto-reindex for now.
+     */
     private int tryReindexIfNeeded(Lecture lecture) {
-        if (lecture.getOriginalText() == null || lecture.getOriginalText().isBlank()) {
-            log.debug("No stored text for lectureId={}, skipping re-index", lecture.getId());
-            return 0;
-        }
-        try {
-            int count = ragService.indexLectureAndCount(lecture.getId(), lecture.getOriginalText());
-            log.info("Re-indexed {} chunks for lectureId={}", count, lecture.getId());
-            return count;
-        } catch (Exception e) {
-            log.error("Re-index failed for lectureId={}: {}", lecture.getId(), e.getMessage(), e);
-            return 0;
-        }
+        log.info("Advanced RAG: Skipping automatic text-based re-index for lectureId={}. "
+                + "Upload the PDF again to refresh the vector store if needed.", lecture.getId());
+        return 0;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
