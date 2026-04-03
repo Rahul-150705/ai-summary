@@ -76,10 +76,14 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        // The property in application.properties is a comma-separated string
-        config.setAllowedOrigins(List.of(allowedOrigins.split(",")));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
+        // Handle comma-separated list and trim whitespace
+        if (allowedOrigins != null && !allowedOrigins.isBlank()) {
+            config.setAllowedOrigins(java.util.Arrays.stream(allowedOrigins.split(","))
+                    .map(String::trim)
+                    .toList());
+        }
+        config.setAllowedMethods(java.util.List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(java.util.List.of("*"));
         config.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

@@ -51,7 +51,7 @@ public class LlmClient {
     @Value("${gemini.api.url:https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent}")
     private String geminiApiUrl;
     // Ollama (local - free, no API key needed)
-    @Value("${ollama.api.url:http://127.0.0.1:11434/api/generate}")
+    @Value("${ollama.api.url:http://127.0.0.1:11434}")
     private String ollamaApiUrl;
 
     @Value("${ollama.model:phi3:latest}")
@@ -207,7 +207,7 @@ public class LlmClient {
         body.put("num_predict", 3000); // cap output tokens so it doesn't run forever
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(ollamaApiUrl))
+                .uri(URI.create(ollamaApiUrl + "/api/generate"))
                 .header("Content-Type", "application/json")
                 .timeout(Duration.ofSeconds(300)) // 5 min — local models are slow for long output
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))

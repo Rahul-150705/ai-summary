@@ -71,7 +71,7 @@ public class StreamingSummarizationService {
     private final ObjectMapper objectMapper;
     private final StreamCancellationService cancellationService;
 
-    @Value("${ollama.model:llama3.2}")
+    @Value("${ollama.model:phi3:latest}")
     private String ollamaModel;
 
     /** STOMP destination prefix for streaming summary messages. */
@@ -482,11 +482,7 @@ public class StreamingSummarizationService {
         // low_vram    : prevent any iGPU offload attempt (would cause stalls)
         // repeat_penalty: reduces duplicate token loops (saves wasted tokens)
         Map<String, Object> options = new java.util.HashMap<>();
-        options.put("num_thread",     NUM_THREADS);
         options.put("num_ctx",        numCtx);
-        options.put("num_batch",      NUM_BATCH);
-        options.put("mmap",           true);
-        options.put("low_vram",       true);
         options.put("temperature",    0.3);
         options.put("repeat_penalty", 1.1);
 
@@ -495,11 +491,10 @@ public class StreamingSummarizationService {
         requestBody.put("prompt",      prompt);
         requestBody.put("stream",      true);
         requestBody.put("num_predict", maxTokens);
-        // keep_alive=-1 → model stays loaded in RAM, no cold-start between chunks
-        requestBody.put("keep_alive",  KEEP_ALIVE);
         requestBody.put("options",     options);
 
         Flux<String> chunkFlux = ollamaWebClient.post()
+                .uri("/api/generate")
                 .bodyValue(requestBody)
                 .retrieve()
                 .bodyToFlux(String.class);
@@ -564,6 +559,7 @@ public class StreamingSummarizationService {
                     "num_predict", 1500); // Chunk summaries should be concise
 
             String responseBody = ollamaWebClient.post()
+                    .uri("/api/generate")
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(String.class)

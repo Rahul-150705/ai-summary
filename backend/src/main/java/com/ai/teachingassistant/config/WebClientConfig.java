@@ -32,7 +32,7 @@ import java.time.Duration;
 @Configuration
 public class WebClientConfig {
 
-    @Value("${ollama.api.url:http://localhost:11434/api/generate}")
+    @Value("${ollama.api.url:http://localhost:11434}")
     private String ollamaBaseUrl;
 
     @Bean
