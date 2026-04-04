@@ -92,6 +92,28 @@ public class PythonRagClient {
     // --- DTOs ---
 
     @Data
+    public static class RetrieveContextResponse {
+        private List<String> chunks;
+    }
+
+    public Mono<RetrieveContextResponse> retrieveContext(String question, String lectureId) {
+        log.info("Fetching Q&A context from Python for lectureId={}", lectureId);
+
+        QueryRequest request = QueryRequest.builder()
+                .question(question)
+                .lectureId(lectureId)
+                .build();
+
+        return webClient.post()
+                .uri("/retrieve-context")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(RetrieveContextResponse.class)
+                .doOnError(err -> log.error("Q&A context fetch failed: {}", err.getMessage()));
+    }
+
+    @Data
     @Builder
     public static class QueryRequest {
         private String question;

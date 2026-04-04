@@ -40,6 +40,7 @@ C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\j
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\dto\QuickIndexResponse.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\auth\UserService.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\model\Lecture.java
+C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\service\StreamingQaService.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\security\SecurityConfig.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\repository\BlacklistedTokenRepository.java
 C:\Users\Rahul.VASUNDRA\Desktop\ai-summary\teaching-assistant\backend\src\main\java\com\ai\teachingassistant\controller\LectureController.java

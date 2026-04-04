@@ -57,6 +57,10 @@ class QueryResult(BaseModel):
     answer: str
     chunks: List[str]
 
+class RetrieveContextRequest(BaseModel):
+    question: str
+    lecture_id: str
+
 # --- CHUNKING & PROCESSING ---
 def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP):
     chunks = []
@@ -186,6 +190,34 @@ ANSWER (be clear, specific, and explain concepts thoroughly):"""
 
     except Exception as e:
         print(f"Error in /query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/retrieve-context")
+async def retrieve_context(request: RetrieveContextRequest):
+    """
+    Returns only the top RERANK_TOP_K chunks relevant to the specific user question.
+    Intended for delegating the LLM generation to the Java backend for streaming.
+    """
+    try:
+        query_emb = embedding_model.encode(request.question)
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT content FROM documents WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
+                    (request.lecture_id, query_emb.tolist(), SEARCH_LIMIT)
+                )
+                retrieved_chunks = [row[0] for row in cur.fetchall()]
+                
+        if not retrieved_chunks:
+            return {"chunks": []}
+            
+        pairs = [[request.question, chunk] for chunk in retrieved_chunks]
+        scores = reranker_model.predict(pairs)
+        ranked = [chunk for _, chunk in sorted(zip(scores, retrieved_chunks), key=lambda x: x[0], reverse=True)]
+        top_chunks = ranked[:RERANK_TOP_K]
+        return {"chunks": top_chunks}
+    except Exception as e:
+        print(f"Error in /retrieve-context: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/quiz-context")
