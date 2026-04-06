@@ -32,22 +32,27 @@ import java.time.Duration;
 @Configuration
 public class WebClientConfig {
 
-    @Value("${ollama.api.url:http://localhost:11434}")
-    private String ollamaBaseUrl;
+        @Value("${ollama.api.url:http://localhost:11434}")
+        private String ollamaBaseUrl;
 
-    @Bean
-    public WebClient ollamaWebClient() {
-        // Netty HTTP client with generous timeouts for slow local models
-        HttpClient httpClient = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10_000) // 10s connect
-                .responseTimeout(Duration.ofMinutes(10)); // 10 min response
+        @Bean
+        public WebClient ollamaWebClient() {
+                HttpClient httpClient = HttpClient.create()
+                                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10_000)
+                                .responseTimeout(Duration.ofMinutes(10));
 
-        return WebClient.builder()
-                .baseUrl(ollamaBaseUrl)
-                .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .codecs(configurer -> configurer
-                        .defaultCodecs()
-                        .maxInMemorySize(2 * 1024 * 1024)) // 2MB buffer per chunk
-                .build();
-    }
+                return WebClient.builder()
+                                .baseUrl(ollamaBaseUrl)
+                                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                                .codecs(configurer -> {
+                                        configurer.defaultCodecs().maxInMemorySize(2 * 1024 * 1024);
+                                        configurer.defaultCodecs().jackson2JsonDecoder(
+                                                        new org.springframework.http.codec.json.Jackson2JsonDecoder(
+                                                                        new com.fasterxml.jackson.databind.ObjectMapper(),
+                                                                        org.springframework.http.MediaType.APPLICATION_NDJSON,
+                                                                        new org.springframework.http.MediaType(
+                                                                                        "application", "x-ndjson")));
+                                })
+                                .build();
+        }
 }

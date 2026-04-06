@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
-
+import java.util.Arrays;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Async;
@@ -77,7 +77,7 @@ public class StreamingQaService {
     private String ollamaModel;
 
     /** STOMP destination prefix — matches the topic the frontend subscribes to. */
-    private static final String TOPIC_PREFIX = "/topic/lectures/";
+    private static final String TOPIC_PREFIX = "/topic/qa/";
 
     /**
      * Context window for the Q&A prompt.
@@ -126,7 +126,7 @@ public class StreamingQaService {
                         + "covered in the uploaded lecture.";
                 sendChunk(lectureId, fallback);
                 messagingTemplate.convertAndSend(
-                        TOPIC_PREFIX + lectureId + "/qa",
+                        TOPIC_PREFIX + lectureId,
                         QaStreamMessage.completed(lectureId, question, fallback, chunks, 0));
                 return CompletableFuture.completedFuture(null);
             }
@@ -151,7 +151,7 @@ public class StreamingQaService {
 
             // ── 6. Send completion event with source chunks ───────────────────
             messagingTemplate.convertAndSend(
-                    TOPIC_PREFIX + lectureId + "/qa",
+                    TOPIC_PREFIX + lectureId,
                     QaStreamMessage.completed(lectureId, question, fullAnswer, chunks, chunks.size()));
 
         } catch (Exception e) {
@@ -196,7 +196,9 @@ public class StreamingQaService {
                 .uri("/api/generate")
                 .bodyValue(requestBody)
                 .retrieve()
-                .bodyToFlux(String.class);
+                .bodyToFlux(String.class) // ✅ FIX
+                .flatMapIterable(response -> Arrays.asList(response.split("\n")))
+                .filter(line -> !line.isBlank());
 
         chunkFlux
                 // Stop cleanly when the user clicks "Stop"
@@ -211,7 +213,7 @@ public class StreamingQaService {
 
                             // Push every token to the WebSocket topic immediately
                             messagingTemplate.convertAndSend(
-                                    TOPIC_PREFIX + lectureId + "/qa",
+                                    TOPIC_PREFIX + lectureId,
                                     QaStreamMessage.chunk(lectureId, token));
                         }
 
@@ -277,14 +279,14 @@ public class StreamingQaService {
     /** Pushes a single text chunk to the Q&A WebSocket topic. */
     private void sendChunk(String lectureId, String text) {
         messagingTemplate.convertAndSend(
-                TOPIC_PREFIX + lectureId + "/qa",
+                TOPIC_PREFIX + lectureId,
                 QaStreamMessage.chunk(lectureId, text));
     }
 
     /** Pushes an error message to the Q&A WebSocket topic. */
     private void sendError(String lectureId, String errorMessage) {
         messagingTemplate.convertAndSend(
-                TOPIC_PREFIX + lectureId + "/qa",
+                TOPIC_PREFIX + lectureId,
                 QaStreamMessage.error(lectureId, errorMessage));
     }
 }

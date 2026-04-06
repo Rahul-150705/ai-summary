@@ -100,7 +100,7 @@ public class QaController {
          * </ol>
          *
          * <p>
-         * Message types on {@code /topic/lectures/{lectureId}/qa}:
+         * Message types on {@code /topic/lectures/{lectureId}}:
          * 
          * <pre>
          * ANSWER_CHUNK     → chunk (streaming token)
@@ -133,7 +133,6 @@ public class QaController {
                 return ResponseEntity.accepted().body(Map.of(
                                 "status", "streaming_started",
                                 "lectureId", lectureId,
-                                "message",
-                                "Subscribe to /topic/lectures/" + lectureId + "/qa for real-time answer chunks."));
+                                "message", "Subscribe to /topic/qa/" + lectureId + " for real-time answer chunks."));
         }
 }
