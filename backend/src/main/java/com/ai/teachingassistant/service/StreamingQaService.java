@@ -135,11 +135,12 @@ public class StreamingQaService {
                     + (chunks.size() == 1 ? "" : "s") + ". Generating answer…*\n\n");
 
             // ── 4. Build grounded prompt ──────────────────────────────────────
-            String contextText = String.join("\n\n---\n\n", chunks);
+            List<String> limitedChunks = chunks.stream().limit(3).toList();
+            String contextText = String.join("\n\n---\n\n", limitedChunks);
             String prompt = buildQaPrompt(contextText, question);
 
             // ── 5. Stream answer from Ollama ──────────────────────────────────
-            String fullAnswer = streamFromOllama(lectureId, prompt, 2000, CTX_QA);
+            String fullAnswer = streamFromOllama(lectureId, prompt, 500, CTX_QA);
 
             if (fullAnswer == null || fullAnswer.isBlank()) {
                 sendError(lectureId, "Ollama returned an empty response.");
