@@ -123,6 +123,7 @@ async def add_document(lecture_id: str = Form(...), file: UploadFile = File(...)
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- QUERY ---
+# --- QUERY ---
 @app.post("/query", response_model=QueryResult)
 async def query_rag(request: QueryRequest):
     try:
@@ -179,6 +180,7 @@ QUESTION:
 ANSWER:
 """
 
+        # ❌ OLD CODE - REMOVE THIS
         ollama_response = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json={
@@ -189,13 +191,13 @@ ANSWER:
         )
 
         answer = ollama_response.json().get("response", "")
+        # ❌ END OLD CODE
 
         return QueryResult(answer=answer, chunks=top_chunks)
 
     except Exception as e:
         print(f"Error in /query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 # --- RETRIEVE CONTEXT ---
 @app.post("/retrieve-context")
 async def retrieve_context(request: RetrieveContextRequest):

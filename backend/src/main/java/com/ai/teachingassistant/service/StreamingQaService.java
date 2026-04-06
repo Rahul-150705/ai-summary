@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Arrays;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Async;
@@ -195,9 +197,16 @@ public class StreamingQaService {
 
         Flux<String> chunkFlux = ollamaWebClient.post()
                 .uri("/api/generate")
+                .header("Accept", "application/x-ndjson")
                 .bodyValue(requestBody)
                 .retrieve()
-                .bodyToFlux(String.class) // ✅ FIX
+                .bodyToFlux(DataBuffer.class) // raw bytes, no buffering
+                .map(buffer -> {
+                    byte[] bytes = new byte[buffer.readableByteCount()];
+                    buffer.read(bytes);
+                    DataBufferUtils.release(buffer); // prevent memory leak
+                    return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                })
                 .flatMapIterable(response -> Arrays.asList(response.split("\n")))
                 .filter(line -> !line.isBlank());
 
