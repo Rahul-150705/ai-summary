@@ -45,13 +45,7 @@ public class WebClientConfig {
                                 .baseUrl(ollamaBaseUrl)
                                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                                 .codecs(configurer -> {
-                                        configurer.defaultCodecs().maxInMemorySize(2 * 1024 * 1024);
-                                        configurer.defaultCodecs().jackson2JsonDecoder(
-                                                        new org.springframework.http.codec.json.Jackson2JsonDecoder(
-                                                                        new com.fasterxml.jackson.databind.ObjectMapper(),
-                                                                        org.springframework.http.MediaType.APPLICATION_NDJSON,
-                                                                        new org.springframework.http.MediaType(
-                                                                                        "application", "x-ndjson")));
+                                        configurer.defaultCodecs().maxInMemorySize(-1);
                                 })
                                 .build();
         }

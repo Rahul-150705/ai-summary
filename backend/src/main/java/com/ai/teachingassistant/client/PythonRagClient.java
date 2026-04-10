@@ -94,6 +94,8 @@ public class PythonRagClient {
     @Data
     public static class RetrieveContextResponse {
         private List<String> chunks;
+        @JsonProperty("cached_answer")
+        private String cachedAnswer;
     }
 
     public Mono<RetrieveContextResponse> retrieveContext(String question, String lectureId) {
@@ -132,5 +134,32 @@ public class PythonRagClient {
     public static class QuizContextResponse {
         private List<String> chunks;
         private String context;
+    }
+
+    @Data
+    @Builder
+    public static class SaveCacheRequest {
+        @JsonProperty("lecture_id")
+        private String lectureId;
+        private String question;
+        private String answer;
+    }
+
+    public Mono<Void> saveCache(String lectureId, String question, String answer) {
+        log.info("Saving Q&A to Python RAG cache for lectureId={}", lectureId);
+
+        SaveCacheRequest request = SaveCacheRequest.builder()
+                .lectureId(lectureId)
+                .question(question)
+                .answer(answer)
+                .build();
+
+        return webClient.post()
+                .uri("/save-cache")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(Void.class)
+                .doOnError(err -> log.error("Failed to save Q&A to cache: {}", err.getMessage()));
     }
 }

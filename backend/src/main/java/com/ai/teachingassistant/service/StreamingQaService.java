@@ -3,6 +3,7 @@ package com.ai.teachingassistant.service;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Arrays;
 import org.springframework.core.io.buffer.DataBuffer;
@@ -117,6 +118,17 @@ public class StreamingQaService {
                 log.error("Failed to retrieve RAG context for lectureId={}: {}", lectureId, e.getMessage());
             }
 
+            // ── 2b. Check Cache First ─────────────────────────────────────────
+            if (contextResponse != null && contextResponse.getCachedAnswer() != null && !contextResponse.getCachedAnswer().isBlank()) {
+                sendChunk(lectureId, "*⚡ Served from FAQ Cache*\n\n");
+                sendChunk(lectureId, contextResponse.getCachedAnswer());
+                messagingTemplate.convertAndSend(
+                        TOPIC_PREFIX + lectureId,
+                        QaStreamMessage.completed(lectureId, question, contextResponse.getCachedAnswer(), List.of(), 0));
+                log.info("Returning cached answer for lectureId={}", lectureId);
+                return CompletableFuture.completedFuture(null);
+            }
+
             List<String> chunks = (contextResponse != null && contextResponse.getChunks() != null)
                     ? contextResponse.getChunks()
                     : List.of();
@@ -157,6 +169,13 @@ public class StreamingQaService {
                     TOPIC_PREFIX + lectureId,
                     QaStreamMessage.completed(lectureId, question, fullAnswer, chunks, chunks.size()));
 
+            // ── 7. Save to Cache ─────────────────────────────────────────────
+            try {
+                pythonRagClient.saveCache(lectureId, question, fullAnswer).subscribe();
+            } catch (Exception e) {
+                log.error("Failed to save QA to cache: {}", e.getMessage());
+            }
+
         } catch (Exception e) {
             log.error("Streaming Q&A FAILED for lectureId={}: {}", lectureId, e.getMessage(), e);
             sendError(lectureId, "Q&A failed: " + e.getMessage());
@@ -172,15 +191,21 @@ public class StreamingQaService {
      * Returns the full accumulated response text.
      *
      * <p>
-     * This method is a direct copy of
-     * {@code StreamingSummarizationService#streamFromOllama} with the only
-     * difference being the STOMP topic suffix ({@code /qa}) and the
-     * {@link QaStreamMessage} DTO instead of
-     * {@link com.ai.teachingassistant.dto.SummaryStreamMessage}.
+     * Logs two timing metrics per request:
+     * <ul>
+     * <li><b>FIRST TOKEN latency</b> — time from request dispatch to the first
+     * non-empty token; reflects model warm-up + prompt-processing overhead.</li>
+     * <li><b>TOTAL generation time</b> — wall-clock time for the entire stream;
+     * useful for throughput analysis.</li>
+     * </ul>
      */
     private String streamFromOllama(String lectureId, String prompt, int maxTokens, int numCtx) {
         StringBuilder fullAnswer = new StringBuilder();
         AtomicReference<Throwable> streamError = new AtomicReference<>();
+
+        // ── Ollama timing metrics ─────────────────────────────────────────────
+        long ollamaStart = System.currentTimeMillis();
+        AtomicBoolean firstTokenLogged = new AtomicBoolean(false);
 
         // ── Ollama generation options (same tuning as summarization) ─────────
         Map<String, Object> options = new java.util.HashMap<>();
@@ -219,6 +244,14 @@ public class StreamingQaService {
                         String token = node.path("response").asText("");
 
                         if (!token.isEmpty()) {
+                            // ── First-token latency ───────────────────────────
+                            if (!firstTokenLogged.get()) {
+                                long firstTokenTime = System.currentTimeMillis() - ollamaStart;
+                                log.info("🔥 Ollama FIRST TOKEN latency = {} ms (lectureId={})",
+                                        firstTokenTime, lectureId);
+                                firstTokenLogged.set(true);
+                            }
+
                             fullAnswer.append(token);
 
                             // Push every token to the WebSocket topic immediately
@@ -239,6 +272,12 @@ public class StreamingQaService {
                     log.error("Stream error for lectureId={}: {}",
                             lectureId, error.getMessage(), error);
                     streamError.set(error);
+                })
+                // ── Total generation time ─────────────────────────────────────
+                .doOnComplete(() -> {
+                    long totalTime = System.currentTimeMillis() - ollamaStart;
+                    log.info("✅ Ollama TOTAL generation time = {} ms (lectureId={})",
+                            totalTime, lectureId);
                 })
                 .blockLast(); // safe — we are on a dedicated @Async thread
 

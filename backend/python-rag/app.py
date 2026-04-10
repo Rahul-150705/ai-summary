@@ -46,6 +46,26 @@ def get_db_conn():
         print(f"FAILED TO CONNECT TO DB: {e}")
         raise e
 
+def init_db():
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS query_cache (
+                        id SERIAL PRIMARY KEY,
+                        lecture_id VARCHAR(255),
+                        question TEXT,
+                        answer TEXT,
+                        embedding vector(1024)
+                    )
+                """)
+            conn.commit()
+            print("✅ DB Cache Table Initialized")
+    except Exception as e:
+        print(f"⚠️ Could not initialize DB Cache Table: {e}")
+
+init_db()
+
 # --- MODELS ---
 class QueryRequest(BaseModel):
     question: str
@@ -58,6 +78,11 @@ class QueryResult(BaseModel):
 class RetrieveContextRequest(BaseModel):
     question: str
     lecture_id: str
+
+class SaveCacheRequest(BaseModel):
+    lecture_id: str
+    question: str
+    answer: str
 
 # --- CHUNKING ---
 def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP):
@@ -184,7 +209,7 @@ ANSWER:
         ollama_response = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json={
-                "model": "phi3:latest",
+                "model": "phi3:mini",
                 "prompt": prompt,
                 "stream": False
             }
@@ -209,6 +234,18 @@ async def retrieve_context(request: RetrieveContextRequest):
 
         with get_db_conn() as conn:
             with conn.cursor() as cur:
+                # 1. 🚀 CACHE LOOKUP optimization
+                cur.execute(
+                    "SELECT answer, (embedding <=> %s::vector) AS distance FROM query_cache WHERE lecture_id = %s ORDER BY distance LIMIT 1",
+                    (query_emb.tolist(), request.lecture_id)
+                )
+                row = cur.fetchone()
+                # Cosine distance < 0.05 means ~95% similarity
+                if row and row[1] < 0.05:
+                    print(f"⚡ RAG CACHE HIT (Distance: {row[1]:.4f}) for lecture {request.lecture_id}")
+                    return {"chunks": [], "cached_answer": row[0]}
+
+                # 2. STANDARD VECTOR SEARCH
                 cur.execute(
                     "SELECT content FROM documents WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
                     (request.lecture_id, query_emb.tolist(), SEARCH_LIMIT)
@@ -243,6 +280,27 @@ async def retrieve_context(request: RetrieveContextRequest):
 
     except Exception as e:
         print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- SAVE CACHE ---
+@app.post("/save-cache")
+async def save_cache(request: SaveCacheRequest):
+    try:
+        emb = embedding_model.encode(
+            request.question,
+            normalize_embeddings=True
+        )
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO query_cache (lecture_id, question, answer, embedding) VALUES (%s, %s, %s, %s::vector)",
+                    (request.lecture_id, request.question, request.answer, emb.tolist())
+                )
+            conn.commit()
+            print(f"💾 Saved to RAG cache for lecture {request.lecture_id}")
+        return {"message": "Cache saved"}
+    except Exception as e:
+        print(f"Error saving cache: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- DEBUG ---
