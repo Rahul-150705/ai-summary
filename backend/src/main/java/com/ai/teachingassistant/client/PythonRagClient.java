@@ -26,7 +26,7 @@ public class PythonRagClient {
     private final WebClient webClient;
 
     public PythonRagClient(WebClient.Builder webClientBuilder, 
-                           @Value("${python.rag.url:http://localhost:8000}") String pythonBaseUrl) {
+                           @Value("${python.rag.url:http://localhost:8001}") String pythonBaseUrl) {
         this.webClient = webClientBuilder.baseUrl(pythonBaseUrl).build();
     }
 
