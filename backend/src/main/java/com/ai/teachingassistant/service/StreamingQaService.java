@@ -5,9 +5,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.Arrays;
-import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Async;
@@ -70,14 +67,14 @@ import reactor.core.publisher.Flux;
 @RequiredArgsConstructor
 public class StreamingQaService {
 
-    private final WebClient ollamaWebClient;
+    private final WebClient groqWebClient;
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
     private final StreamCancellationService cancellationService;
     private final PythonRagClient pythonRagClient;
 
-    @Value("${ollama.model:llama3.2:latest}")
-    private String ollamaModel;
+    @Value("${groq.model:llama-3.3-70b-versatile}")
+    private String groqModel;
 
     /** STOMP destination prefix — matches the topic the frontend subscribes to. */
     private static final String TOPIC_PREFIX = "/topic/qa/";
@@ -153,11 +150,11 @@ public class StreamingQaService {
             String contextText = String.join("\n\n---\n\n", limitedChunks);
             String prompt = buildQaPrompt(contextText, question);
 
-            // ── 5. Stream answer from Ollama ──────────────────────────────────
-            String fullAnswer = streamFromOllama(lectureId, prompt, 500, CTX_QA);
+            // ── 5. Stream answer from Groq ──────────────────────────────────
+            String fullAnswer = streamFromGroq(lectureId, prompt, 500, CTX_QA);
 
             if (fullAnswer == null || fullAnswer.isBlank()) {
-                sendError(lectureId, "Ollama returned an empty response.");
+                sendError(lectureId, "Groq returned an empty response.");
                 return CompletableFuture.completedFuture(null);
             }
 
@@ -184,10 +181,10 @@ public class StreamingQaService {
         return CompletableFuture.completedFuture(null);
     }
 
-    // ── Ollama streaming — identical pattern to StreamingSummarizationService ─
+    // ── Groq streaming — identical pattern to StreamingSummarizationService ─
 
     /**
-     * Streams a prompt to Ollama and pushes each token to the Q&A WebSocket topic.
+     * Streams a prompt to Groq and pushes each token to the Q&A WebSocket topic.
      * Returns the full accumulated response text.
      *
      * <p>
@@ -199,72 +196,67 @@ public class StreamingQaService {
      * useful for throughput analysis.</li>
      * </ul>
      */
-    private String streamFromOllama(String lectureId, String prompt, int maxTokens, int numCtx) {
+    private String streamFromGroq(String lectureId, String prompt, int maxTokens, int numCtx) {
         StringBuilder fullAnswer = new StringBuilder();
         AtomicReference<Throwable> streamError = new AtomicReference<>();
 
-        // ── Ollama timing metrics ─────────────────────────────────────────────
-        long ollamaStart = System.currentTimeMillis();
+        // ── Groq timing metrics ─────────────────────────────────────────────
+        long groqStart = System.currentTimeMillis();
         AtomicBoolean firstTokenLogged = new AtomicBoolean(false);
 
-        // ── Ollama generation options (same tuning as summarization) ─────────
-        Map<String, Object> options = new java.util.HashMap<>();
-        options.put("num_ctx", numCtx);
-        options.put("temperature", 0.3);
-        options.put("repeat_penalty", 1.1);
-
         Map<String, Object> requestBody = new java.util.HashMap<>();
-        requestBody.put("model", ollamaModel);
-        requestBody.put("prompt", prompt);
+        requestBody.put("model", groqModel);
         requestBody.put("stream", true);
-        requestBody.put("num_predict", maxTokens);
-        requestBody.put("options", options);
+        requestBody.put("max_tokens", maxTokens);
+        List<Map<String, String>> messages = new java.util.ArrayList<>();
+        messages.add(Map.of("role", "user", "content", prompt));
+        requestBody.put("messages", messages);
 
-        Flux<String> chunkFlux = ollamaWebClient.post()
-                .uri("/api/generate")
-                .header("Accept", "application/x-ndjson")
+        Flux<org.springframework.http.codec.ServerSentEvent<String>> chunkFlux = groqWebClient.post()
+                .uri("/chat/completions")
+                .accept(org.springframework.http.MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(requestBody)
                 .retrieve()
-                .bodyToFlux(DataBuffer.class) // raw bytes, no buffering
-                .map(buffer -> {
-                    byte[] bytes = new byte[buffer.readableByteCount()];
-                    buffer.read(bytes);
-                    DataBufferUtils.release(buffer); // prevent memory leak
-                    return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
-                })
-                .flatMapIterable(response -> Arrays.asList(response.split("\n")))
-                .filter(line -> !line.isBlank());
+                .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<org.springframework.http.codec.ServerSentEvent<String>>() {});
 
         chunkFlux
                 // Stop cleanly when the user clicks "Stop"
-                .takeWhile(line -> !cancellationService.isCancelled(lectureId))
-                .doOnNext(line -> {
+                .takeWhile(event -> !cancellationService.isCancelled(lectureId))
+                .doOnNext(event -> {
                     try {
-                        JsonNode node = objectMapper.readTree(line);
-                        String token = node.path("response").asText("");
-
-                        if (!token.isEmpty()) {
-                            // ── First-token latency ───────────────────────────
-                            if (!firstTokenLogged.get()) {
-                                long firstTokenTime = System.currentTimeMillis() - ollamaStart;
-                                log.info("🔥 Ollama FIRST TOKEN latency = {} ms (lectureId={})",
-                                        firstTokenTime, lectureId);
-                                firstTokenLogged.set(true);
+                        String data = event.data();
+                        if (data != null) {
+                            if (data.equals("[DONE]")) {
+                                log.debug("Groq signaled done for lectureId={}", lectureId);
+                                return;
                             }
+                            JsonNode node = objectMapper.readTree(data);
+                            JsonNode choices = node.path("choices");
+                            if (choices.isArray() && choices.size() > 0) {
+                                JsonNode delta = choices.get(0).path("delta");
+                                if (delta.has("content")) {
+                                    String token = delta.path("content").asText("");
+                                    if (!token.isEmpty()) {
+                                        // ── First-token latency ───────────────────────────
+                                        if (!firstTokenLogged.get()) {
+                                            long firstTokenTime = System.currentTimeMillis() - groqStart;
+                                            log.info("🔥 Groq FIRST TOKEN latency = {} ms (lectureId={})",
+                                                    firstTokenTime, lectureId);
+                                            firstTokenLogged.set(true);
+                                        }
 
-                            fullAnswer.append(token);
+                                        fullAnswer.append(token);
 
-                            // Push every token to the WebSocket topic immediately
-                            messagingTemplate.convertAndSend(
-                                    TOPIC_PREFIX + lectureId,
-                                    QaStreamMessage.chunk(lectureId, token));
-                        }
-
-                        if (node.path("done").asBoolean(false)) {
-                            log.debug("Ollama signaled done=true for lectureId={}", lectureId);
+                                        // Push every token to the WebSocket topic immediately
+                                        messagingTemplate.convertAndSend(
+                                                TOPIC_PREFIX + lectureId,
+                                                QaStreamMessage.chunk(lectureId, token));
+                                    }
+                                }
+                            }
                         }
                     } catch (Exception e) {
-                        log.warn("Failed to parse Ollama QA chunk for lectureId={}: {}",
+                        log.warn("Failed to parse Groq QA chunk for lectureId={}: {}",
                                 lectureId, e.getMessage());
                     }
                 })
@@ -275,15 +267,15 @@ public class StreamingQaService {
                 })
                 // ── Total generation time ─────────────────────────────────────
                 .doOnComplete(() -> {
-                    long totalTime = System.currentTimeMillis() - ollamaStart;
-                    log.info("✅ Ollama TOTAL generation time = {} ms (lectureId={})",
+                    long totalTime = System.currentTimeMillis() - groqStart;
+                    log.info("✅ Groq TOTAL generation time = {} ms (lectureId={})",
                             totalTime, lectureId);
                 })
                 .blockLast(); // safe — we are on a dedicated @Async thread
 
         // Append stop notice if the user cancelled mid-stream
         if (cancellationService.isCancelled(lectureId)) {
-            log.info("Ollama Q&A streaming CANCELLED by user for lectureId={}", lectureId);
+            log.info("Groq Q&A streaming CANCELLED by user for lectureId={}", lectureId);
             sendChunk(lectureId, "\n\n*[Generation stopped by user]*");
         }
 

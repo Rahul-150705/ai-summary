@@ -49,4 +49,26 @@ public class WebClientConfig {
                                 })
                                 .build();
         }
+
+        @Value("${groq.api.url:https://api.groq.com/openai/v1/chat/completions}")
+        private String groqApiUrl;
+
+        @Value("${groq.api.key:}")
+        private String groqApiKey;
+
+        @Bean
+        public WebClient groqWebClient() {
+                HttpClient httpClient = HttpClient.create()
+                                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10_000)
+                                .responseTimeout(Duration.ofMinutes(10));
+
+                return WebClient.builder()
+                                .baseUrl(groqApiUrl)
+                                .defaultHeader("Authorization", "Bearer " + groqApiKey)
+                                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                                .codecs(configurer -> {
+                                        configurer.defaultCodecs().maxInMemorySize(-1);
+                                })
+                                .build();
+        }
 }

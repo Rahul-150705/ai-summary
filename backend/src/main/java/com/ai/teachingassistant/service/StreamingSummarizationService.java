@@ -65,14 +65,14 @@ import reactor.core.publisher.Flux;
 @RequiredArgsConstructor
 public class StreamingSummarizationService {
 
-    private final WebClient ollamaWebClient;
+    private final WebClient groqWebClient;
     private final SimpMessagingTemplate messagingTemplate;
     private final LectureRepository lectureRepository;
     private final ObjectMapper objectMapper;
     private final StreamCancellationService cancellationService;
 
-    @Value("${ollama.model:phi3:latest}")
-    private String ollamaModel;
+    @Value("${groq.model:llama-3.3-70b-versatile}")
+    private String groqModel;
 
     /** STOMP destination prefix for streaming summary messages. */
     private static final String TOPIC_PREFIX = "/topic/lectures/";
@@ -165,7 +165,7 @@ public class StreamingSummarizationService {
             }
 
             lecture.setSummary(completeSummary);
-            lecture.setProvider("ollama");
+            lecture.setProvider("groq");
             lectureRepository.save(lecture);
 
             log.info("Streaming summarization complete for lectureId={}, " +
@@ -366,7 +366,7 @@ public class StreamingSummarizationService {
      */
     private String streamSinglePass(String lectureId, String extractedText) {
         String prompt = buildFinalPrompt(extractedText);
-        return streamFromOllama(lectureId, prompt, 2000);
+        return streamFromGroq(lectureId, prompt, 2000);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -404,7 +404,7 @@ public class StreamingSummarizationService {
 
             // Stream this chunk summary live to the user
             String chunkPrompt = buildChunkPrompt(chunks.get(i), i + 1, chunks.size());
-            String chunkSummary = streamFromOllama(lectureId, chunkPrompt, 500);
+            String chunkSummary = streamFromGroq(lectureId, chunkPrompt, 500);
 
             if (chunkSummary != null && !chunkSummary.isBlank()) {
                 chunkSummaries.add(chunkSummary.trim());
@@ -446,73 +446,63 @@ public class StreamingSummarizationService {
 
         String reducePrompt = buildReducePrompt(combinedSummaries);
 
-        // Stream the reduce phase with a larger context window (CTX_REDUCE=8192)
-        // because the prompt contains ALL chunk summaries concatenated.
-        return streamFromOllama(lectureId, reducePrompt, 2000, CTX_REDUCE);
+        return streamFromGroq(lectureId, reducePrompt, 2000, CTX_REDUCE);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
     // OLLAMA COMMUNICATION
     // ═════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Streams a prompt to Ollama and pushes each token to the WebSocket topic.
-     * Returns the full accumulated response.
-     */
-    private String streamFromOllama(String lectureId, String prompt, int maxTokens) {
-        return streamFromOllama(lectureId, prompt, maxTokens, CTX_CHUNK);
+    private String streamFromGroq(String lectureId, String prompt, int maxTokens) {
+        return streamFromGroq(lectureId, prompt, maxTokens, CTX_CHUNK);
     }
 
-    private String streamFromOllama(String lectureId, String prompt, int maxTokens, int numCtx) {
+    private String streamFromGroq(String lectureId, String prompt, int maxTokens, int numCtx) {
         StringBuilder fullSummary = new StringBuilder();
         AtomicReference<Throwable> streamError = new AtomicReference<>();
 
-        // ── CPU-max options for Intel i5-1240P ─────────────────────────────
-        // num_thread  : use 14 of 16 logical threads; leave 2 for OS/JVM
-        // num_ctx     : keep small for chunks (fast prefill), large for reduce
-        // num_batch   : 512 tokens/pass → better CPU throughput vs default 128
-        // mmap        : memory-map the model weights → stays in RAM between calls
-        // low_vram    : prevent any iGPU offload attempt (would cause stalls)
-        // repeat_penalty: reduces duplicate token loops (saves wasted tokens)
-        Map<String, Object> options = new java.util.HashMap<>();
-        options.put("num_ctx",        numCtx);
-        options.put("temperature",    0.3);
-        options.put("repeat_penalty", 1.1);
-
         Map<String, Object> requestBody = new java.util.HashMap<>();
-        requestBody.put("model",       ollamaModel);
-        requestBody.put("prompt",      prompt);
+        requestBody.put("model",       groqModel);
         requestBody.put("stream",      true);
-        requestBody.put("num_predict", maxTokens);
-        requestBody.put("options",     options);
+        requestBody.put("max_tokens",  maxTokens);
+        List<Map<String, String>> messages = new java.util.ArrayList<>();
+        messages.add(Map.of("role", "user", "content", prompt));
+        requestBody.put("messages",    messages);
 
-        Flux<String> chunkFlux = ollamaWebClient.post()
-                .uri("/api/generate")
+        Flux<org.springframework.http.codec.ServerSentEvent<String>> chunkFlux = groqWebClient.post()
+                .uri("/chat/completions")
+                .accept(org.springframework.http.MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(requestBody)
                 .retrieve()
-                .bodyToFlux(String.class);
+                .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<org.springframework.http.codec.ServerSentEvent<String>>() {});
 
         chunkFlux
-                .takeWhile(line -> !cancellationService.isCancelled(lectureId))
-                .doOnNext(line -> {
+                .takeWhile(event -> !cancellationService.isCancelled(lectureId))
+                .doOnNext(event -> {
                     try {
-                        JsonNode node = objectMapper.readTree(line);
-                        String token = node.path("response").asText("");
-
-                        if (!token.isEmpty()) {
-                            fullSummary.append(token);
-
-                            messagingTemplate.convertAndSend(
-                                    TOPIC_PREFIX + lectureId,
-                                    SummaryStreamMessage.chunk(lectureId, token));
-                        }
-
-                        if (node.path("done").asBoolean(false)) {
-                            log.debug("Ollama signaled done=true for lectureId={}",
-                                    lectureId);
+                        String data = event.data();
+                        if (data != null) {
+                            if (data.equals("[DONE]")) {
+                                log.debug("Groq signaled done for lectureId={}", lectureId);
+                                return;
+                            }
+                            JsonNode node = objectMapper.readTree(data);
+                            JsonNode choices = node.path("choices");
+                            if (choices.isArray() && choices.size() > 0) {
+                                JsonNode delta = choices.get(0).path("delta");
+                                if (delta.has("content")) {
+                                    String token = delta.path("content").asText("");
+                                    if (!token.isEmpty()) {
+                                        fullSummary.append(token);
+                                        messagingTemplate.convertAndSend(
+                                                TOPIC_PREFIX + lectureId,
+                                                SummaryStreamMessage.chunk(lectureId, token));
+                                    }
+                                }
+                            }
                         }
                     } catch (Exception e) {
-                        log.warn("Failed to parse Ollama chunk for lectureId={}: {}",
+                        log.warn("Failed to parse Groq chunk for lectureId={}: {}",
                                 lectureId, e.getMessage());
                     }
                 })
@@ -525,7 +515,7 @@ public class StreamingSummarizationService {
 
         // If cancelled, append a stop notice
         if (cancellationService.isCancelled(lectureId)) {
-            log.info("Ollama streaming CANCELLED by user for lectureId={}", lectureId);
+            log.info("Groq streaming CANCELLED by user for lectureId={}", lectureId);
             messagingTemplate.convertAndSend(
                     TOPIC_PREFIX + lectureId,
                     SummaryStreamMessage.chunk(lectureId, "\n\n*[Generation stopped by user]*"));
@@ -539,20 +529,18 @@ public class StreamingSummarizationService {
         return fullSummary.toString();
     }
 
-    /**
-     * Calls Ollama synchronously (non-streaming) for the MAP phase.
-     * Each chunk summary is collected before moving to the next chunk.
-     */
-    private String callOllamaNonStreaming(String prompt) {
+    private String callGroqNonStreaming(String prompt) {
         try {
-            Map<String, Object> requestBody = Map.of(
-                    "model", ollamaModel,
-                    "prompt", prompt,
-                    "stream", false,
-                    "num_predict", 1500); // Chunk summaries should be concise
+            Map<String, Object> requestBody = new java.util.HashMap<>();
+            requestBody.put("model", groqModel);
+            requestBody.put("stream", false);
+            requestBody.put("max_tokens", 1500); // Chunk summaries should be concise
+            List<Map<String, String>> messages = new java.util.ArrayList<>();
+            messages.add(Map.of("role", "user", "content", prompt));
+            requestBody.put("messages", messages);
 
-            String responseBody = ollamaWebClient.post()
-                    .uri("/api/generate")
+            String responseBody = groqWebClient.post()
+                    .uri("/chat/completions")
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(String.class)
@@ -562,9 +550,9 @@ public class StreamingSummarizationService {
                 return null;
 
             JsonNode root = objectMapper.readTree(responseBody);
-            return root.path("response").asText("");
+            return root.path("choices").get(0).path("message").path("content").asText("");
         } catch (Exception e) {
-            log.error("Non-streaming Ollama call failed: {}", e.getMessage(), e);
+            log.error("Non-streaming Groq call failed: {}", e.getMessage(), e);
             return null;
         }
     }

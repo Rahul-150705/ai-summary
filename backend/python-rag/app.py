@@ -205,18 +205,29 @@ QUESTION:
 ANSWER:
 """
 
-        # ❌ OLD CODE - REMOVE THIS
-        ollama_response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
+        # Using Groq API
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise Exception("GROQ_API_KEY is not set in environment or .env file")
+            
+        groq_response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {groq_api_key}",
+                "Content-Type": "application/json"
+            },
             json={
-                "model": "phi3:mini",
-                "prompt": prompt,
-                "stream": False
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ]
             }
         )
-
-        answer = ollama_response.json().get("response", "")
-        # ❌ END OLD CODE
+        
+        if groq_response.status_code != 200:
+            raise Exception(f"Groq API Error: {groq_response.text}")
+            
+        answer = groq_response.json()["choices"][0]["message"]["content"]
 
         return QueryResult(answer=answer, chunks=top_chunks)
 
