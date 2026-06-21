@@ -6,12 +6,10 @@ import json
 import fitz
 import psycopg2
 import requests
+import numpy as np
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-from sentence_transformers import SentenceTransformer
-import torch 
-torch.set_num_threads(1) # Extra safety for PyTorch CPU limits
 
 from dotenv import load_dotenv
 
@@ -35,10 +33,34 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))
 SEARCH_LIMIT = int(os.getenv("VECTOR_SEARCH_LIMIT", 8))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", 2))
 
-# --- ML MODELS ---
-print("Loading all-MiniLM-L6-v2 Embedding Model...")
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-# embedding_model.max_seq_length = 512 (default is fine for MiniLM)
+# --- EMBDEDDING MODEL (Hugging Face API wrapper) ---
+class HuggingFaceEmbedding:
+    def __init__(self, token):
+        self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+        self.headers = {"Authorization": f"Bearer {token}"}
+
+    def encode(self, texts, **kwargs):
+        is_single = isinstance(texts, str)
+        if is_single:
+            texts = [texts]
+        
+        response = requests.post(self.api_url, headers=self.headers, json={"inputs": texts})
+        
+        if response.status_code != 200:
+            raise Exception(f"Hugging Face API Error: {response.text}")
+            
+        embeddings = np.array(response.json())
+        
+        if kwargs.get("normalize_embeddings"):
+            # L2 normalization across rows
+            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+            embeddings = np.where(norms > 0, embeddings / norms, embeddings)
+            
+        return embeddings[0] if is_single else embeddings
+
+hf_token = os.getenv("HF_API_TOKEN")
+print("Loading Hugging Face API Embedding Wrapper...")
+embedding_model = HuggingFaceEmbedding(token=hf_token)
 
 # REMOVED RERANKER: The cross-encoder takes too much RAM and exceeds Render's 512MB limit!
 # reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')

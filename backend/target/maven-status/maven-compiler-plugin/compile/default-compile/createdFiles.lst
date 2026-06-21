@@ -33,6 +33,7 @@ com\ai\teachingassistant\model\User.class
 com\ai\teachingassistant\dto\UserStatsResponse$UserStatsResponseBuilder.class
 com\ai\teachingassistant\service\SummarizationService.class
 com\ai\teachingassistant\dto\QuickIndexResponse.class
+com\ai\teachingassistant\service\StreamingQaService$1.class
 com\ai\teachingassistant\dto\QuizQuestion$QuizQuestionBuilder.class
 com\ai\teachingassistant\security\JwtUtil.class
 com\ai\teachingassistant\auth\AuthController.class
@@ -70,6 +71,7 @@ com\ai\teachingassistant\client\PythonRagClient.class
 com\ai\teachingassistant\controller\LectureController.class
 com\ai\teachingassistant\dto\SummaryResponse.class
 com\ai\teachingassistant\dto\QuizSubmitResponse$QuestionResult.class
+com\ai\teachingassistant\service\StreamingSummarizationService$1.class
 com\ai\teachingassistant\TeachingAssistantApplication.class
 com\ai\teachingassistant\client\PythonRagClient$QueryRequest$QueryRequestBuilder.class
 com\ai\teachingassistant\dto\QuizResponse.class

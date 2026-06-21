@@ -1,11 +1,9 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
 fastapi
 python-multipart
 uvicorn
-sentence-transformers
 psycopg2-binary
 pymupdf
 requests
 pydantic
 python-dotenv
+numpy
