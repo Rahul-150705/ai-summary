@@ -1,4 +1,6 @@
 import os
+os.environ["OMP_NUM_THREADS"] = "1" # Force PyTorch to use 1 thread to avoid memory spikes
+
 import io
 import json
 import fitz
@@ -7,7 +9,10 @@ import requests
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-from sentence_transformers import SentenceTransformer, CrossEncoder
+from sentence_transformers import SentenceTransformer
+import torch 
+torch.set_num_threads(1) # Extra safety for PyTorch CPU limits
+
 from dotenv import load_dotenv
 
 load_dotenv()
