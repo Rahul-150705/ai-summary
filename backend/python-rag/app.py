@@ -33,24 +33,45 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))
 SEARCH_LIMIT = int(os.getenv("VECTOR_SEARCH_LIMIT", 8))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", 2))
 
+import time
+
 # --- EMBDEDDING MODEL (Hugging Face API wrapper) ---
 class HuggingFaceEmbedding:
     def __init__(self, token):
         self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
         self.headers = {"Authorization": f"Bearer {token}"}
 
+    def _encode_batch(self, texts):
+        max_retries = 4
+        for attempt in range(max_retries):
+            response = requests.post(self.api_url, headers=self.headers, json={"inputs": texts})
+            
+            if response.status_code == 200:
+                return np.array(response.json())
+            elif response.status_code == 503 and "loading" in response.text.lower():
+                print(f"Hugging Face model waking up (Attempt {attempt+1}/{max_retries}). Waiting 15s...")
+                if attempt < max_retries - 1:
+                    time.sleep(15)
+                else:
+                    raise Exception(f"HF API Timeout: Model loading failed after retries.")
+            else:
+                raise Exception(f"Hugging Face API Error: {response.text}")
+
     def encode(self, texts, **kwargs):
         is_single = isinstance(texts, str)
         if is_single:
             texts = [texts]
         
-        response = requests.post(self.api_url, headers=self.headers, json={"inputs": texts})
-        
-        if response.status_code != 200:
-            raise Exception(f"Hugging Face API Error: {response.text}")
+        # Hugging Face Free API has payload limits. We should batch them in groups of 10.
+        batch_size = 10
+        all_embeddings = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i+batch_size]
+            batch_emb = self._encode_batch(batch)
+            all_embeddings.extend(batch_emb)
             
-        embeddings = np.array(response.json())
-        
+        embeddings = np.array(all_embeddings)
+            
         if kwargs.get("normalize_embeddings"):
             # L2 normalization across rows
             norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
