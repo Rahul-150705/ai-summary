@@ -31,12 +31,12 @@ SEARCH_LIMIT = int(os.getenv("VECTOR_SEARCH_LIMIT", 8))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", 2))
 
 # --- ML MODELS ---
-print("Loading BGE-Large-v1.5 Embedding Model...")
-embedding_model = SentenceTransformer('BAAI/bge-large-en-v1.5')
-embedding_model.max_seq_length = 512
+print("Loading all-MiniLM-L6-v2 Embedding Model...")
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+# embedding_model.max_seq_length = 512 (default is fine for MiniLM)
 
-print("Loading Cross-Encoder Reranker...")
-reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+# REMOVED RERANKER: The cross-encoder takes too much RAM and exceeds Render's 512MB limit!
+# reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
 # --- DB HELPERS ---
 def get_db_conn():
@@ -50,19 +50,28 @@ def init_db():
     try:
         with get_db_conn() as conn:
             with conn.cursor() as cur:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
                 cur.execute("""
-                    CREATE TABLE IF NOT EXISTS query_cache (
+                    CREATE TABLE IF NOT EXISTS query_cache_mini (
                         id SERIAL PRIMARY KEY,
                         lecture_id VARCHAR(255),
                         question TEXT,
                         answer TEXT,
-                        embedding vector(1024)
+                        embedding vector(384)
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS documents_mini (
+                        id uuid default gen_random_uuid() primary key,
+                        content text,
+                        metadata jsonb,
+                        embedding vector(384)
                     )
                 """)
             conn.commit()
-            print("✅ DB Cache Table Initialized")
+            print("✅ DB Tables Initialized")
     except Exception as e:
-        print(f"⚠️ Could not initialize DB Cache Table: {e}")
+        print(f"⚠️ Could not initialize DB Tables: {e}")
 
 init_db()
 
@@ -130,13 +139,13 @@ async def add_document(lecture_id: str = Form(...), file: UploadFile = File(...)
         with get_db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM documents WHERE metadata->>'lecture_id' = %s",
+                    "DELETE FROM documents_mini WHERE metadata->>'lecture_id' = %s",
                     (lecture_id,)
                 )
 
                 for chunk, embedding in zip(chunks, embeddings):
                     cur.execute(
-                        "INSERT INTO documents (content, embedding, metadata) VALUES (%s, %s::vector, %s)",
+                        "INSERT INTO documents_mini (content, embedding, metadata) VALUES (%s, %s::vector, %s)",
                         (chunk, embedding.tolist(), json.dumps({"lecture_id": lecture_id}))
                     )
                 conn.commit()
@@ -160,7 +169,7 @@ async def query_rag(request: QueryRequest):
         with get_db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT content FROM documents WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
+                    "SELECT content FROM documents_mini WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
                     (request.lecture_id, query_emb.tolist(), SEARCH_LIMIT)
                 )
                 retrieved_chunks = [row[0] for row in cur.fetchall()]
@@ -168,23 +177,8 @@ async def query_rag(request: QueryRequest):
         if not retrieved_chunks:
             return QueryResult(answer="No content found", chunks=[])
 
-        pairs = [[request.question, chunk] for chunk in retrieved_chunks]
-
-        scores = reranker_model.predict(
-            pairs,
-            batch_size=16,
-            show_progress_bar=False
-        )
-
-        ranked_chunks = [
-            chunk for _, chunk in sorted(
-                zip(scores, retrieved_chunks),
-                key=lambda x: x[0],
-                reverse=True
-            )
-        ]
-
-        top_chunks = ranked_chunks[:RERANK_TOP_K]
+        # REMOVED RERANKER for memory usage: just uses the raw vector similarity sorting
+        top_chunks = retrieved_chunks[:RERANK_TOP_K]
 
         # 🚀 KEY OPTIMIZATION
         top_chunks = trim_chunks(top_chunks)
@@ -247,7 +241,7 @@ async def retrieve_context(request: RetrieveContextRequest):
             with conn.cursor() as cur:
                 # 1. 🚀 CACHE LOOKUP optimization
                 cur.execute(
-                    "SELECT answer, (embedding <=> %s::vector) AS distance FROM query_cache WHERE lecture_id = %s ORDER BY distance LIMIT 1",
+                    "SELECT answer, (embedding <=> %s::vector) AS distance FROM query_cache_mini WHERE lecture_id = %s ORDER BY distance LIMIT 1",
                     (query_emb.tolist(), request.lecture_id)
                 )
                 row = cur.fetchone()
@@ -258,7 +252,7 @@ async def retrieve_context(request: RetrieveContextRequest):
 
                 # 2. STANDARD VECTOR SEARCH
                 cur.execute(
-                    "SELECT content FROM documents WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
+                    "SELECT content FROM documents_mini WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
                     (request.lecture_id, query_emb.tolist(), SEARCH_LIMIT)
                 )
                 retrieved_chunks = [row[0] for row in cur.fetchall()]
@@ -266,23 +260,8 @@ async def retrieve_context(request: RetrieveContextRequest):
         if not retrieved_chunks:
             return {"chunks": []}
 
-        pairs = [[request.question, chunk] for chunk in retrieved_chunks]
-
-        scores = reranker_model.predict(
-            pairs,
-            batch_size=16,
-            show_progress_bar=False
-        )
-
-        ranked = [
-            chunk for _, chunk in sorted(
-                zip(scores, retrieved_chunks),
-                key=lambda x: x[0],
-                reverse=True
-            )
-        ]
-
-        top_chunks = ranked[:RERANK_TOP_K]
+        # REMOVED RERANKER for memory usage: just uses the raw vector similarity sorting
+        top_chunks = retrieved_chunks[:RERANK_TOP_K]
 
         # 🚀 OPTIMIZATION
         top_chunks = trim_chunks(top_chunks)
@@ -304,7 +283,7 @@ async def save_cache(request: SaveCacheRequest):
         with get_db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO query_cache (lecture_id, question, answer, embedding) VALUES (%s, %s, %s, %s::vector)",
+                    "INSERT INTO query_cache_mini (lecture_id, question, answer, embedding) VALUES (%s, %s, %s, %s::vector)",
                     (request.lecture_id, request.question, request.answer, emb.tolist())
                 )
             conn.commit()
@@ -320,7 +299,7 @@ async def debug(lecture_id: str):
     with get_db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) FROM documents WHERE metadata->>'lecture_id' = %s",
+                "SELECT COUNT(*) FROM documents_mini WHERE metadata->>'lecture_id' = %s",
                 (lecture_id,)
             )
             count = cur.fetchone()[0]
