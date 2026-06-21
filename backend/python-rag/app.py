@@ -100,7 +100,7 @@ def init_db():
             with conn.cursor() as cur:
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
                 cur.execute("""
-                    CREATE TABLE IF NOT EXISTS query_cache_mini (
+                    CREATE TABLE IF NOT EXISTS query_cache (
                         id SERIAL PRIMARY KEY,
                         lecture_id VARCHAR(255),
                         question TEXT,
@@ -109,7 +109,7 @@ def init_db():
                     )
                 """)
                 cur.execute("""
-                    CREATE TABLE IF NOT EXISTS documents_mini (
+                    CREATE TABLE IF NOT EXISTS documents (
                         id uuid default gen_random_uuid() primary key,
                         content text,
                         metadata jsonb,
@@ -187,13 +187,13 @@ async def add_document(lecture_id: str = Form(...), file: UploadFile = File(...)
         with get_db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM documents_mini WHERE metadata->>'lecture_id' = %s",
+                    "DELETE FROM documents WHERE metadata->>'lecture_id' = %s",
                     (lecture_id,)
                 )
 
                 for chunk, embedding in zip(chunks, embeddings):
                     cur.execute(
-                        "INSERT INTO documents_mini (content, embedding, metadata) VALUES (%s, %s::vector, %s)",
+                        "INSERT INTO documents (content, embedding, metadata) VALUES (%s, %s::vector, %s)",
                         (chunk, embedding.tolist(), json.dumps({"lecture_id": lecture_id}))
                     )
                 conn.commit()
@@ -217,7 +217,7 @@ async def query_rag(request: QueryRequest):
         with get_db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT content FROM documents_mini WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
+                    "SELECT content FROM documents WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
                     (request.lecture_id, query_emb.tolist(), SEARCH_LIMIT)
                 )
                 retrieved_chunks = [row[0] for row in cur.fetchall()]
@@ -289,7 +289,7 @@ async def retrieve_context(request: RetrieveContextRequest):
             with conn.cursor() as cur:
                 # 1. 🚀 CACHE LOOKUP optimization
                 cur.execute(
-                    "SELECT answer, (embedding <=> %s::vector) AS distance FROM query_cache_mini WHERE lecture_id = %s ORDER BY distance LIMIT 1",
+                    "SELECT answer, (embedding <=> %s::vector) AS distance FROM query_cache WHERE lecture_id = %s ORDER BY distance LIMIT 1",
                     (query_emb.tolist(), request.lecture_id)
                 )
                 row = cur.fetchone()
@@ -300,7 +300,7 @@ async def retrieve_context(request: RetrieveContextRequest):
 
                 # 2. STANDARD VECTOR SEARCH
                 cur.execute(
-                    "SELECT content FROM documents_mini WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
+                    "SELECT content FROM documents WHERE metadata->>'lecture_id' = %s ORDER BY embedding <=> %s::vector LIMIT %s",
                     (request.lecture_id, query_emb.tolist(), SEARCH_LIMIT)
                 )
                 retrieved_chunks = [row[0] for row in cur.fetchall()]
@@ -331,7 +331,7 @@ async def save_cache(request: SaveCacheRequest):
         with get_db_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO query_cache_mini (lecture_id, question, answer, embedding) VALUES (%s, %s, %s, %s::vector)",
+                    "INSERT INTO query_cache (lecture_id, question, answer, embedding) VALUES (%s, %s, %s, %s::vector)",
                     (request.lecture_id, request.question, request.answer, emb.tolist())
                 )
             conn.commit()
@@ -347,7 +347,7 @@ async def debug(lecture_id: str):
     with get_db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) FROM documents_mini WHERE metadata->>'lecture_id' = %s",
+                "SELECT COUNT(*) FROM documents WHERE metadata->>'lecture_id' = %s",
                 (lecture_id,)
             )
             count = cur.fetchone()[0]
