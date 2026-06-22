@@ -68,7 +68,13 @@ class HuggingFaceEmbedding:
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i+batch_size]
             batch_emb = self._encode_batch(batch)
-            all_embeddings.extend(batch_emb)
+            
+            # HuggingFace sometimes strips the outer array if batch has only 1 item
+            if batch_emb.ndim == 1:
+                batch_emb = np.expand_dims(batch_emb, axis=0)
+                
+            for row in batch_emb:
+                all_embeddings.append(row)
             
         embeddings = np.array(all_embeddings)
             
