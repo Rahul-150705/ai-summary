@@ -47,7 +47,10 @@ class HuggingFaceEmbedding:
             response = requests.post(self.api_url, headers=self.headers, json={"inputs": texts})
             
             if response.status_code == 200:
-                return np.array(response.json())
+                result = np.array(response.json())
+                if result.ndim == 3:  # token-level embeddings → collapse to sentence
+                    result = result.mean(axis=1)
+                return result
             elif response.status_code == 503 and "loading" in response.text.lower():
                 print(f"Hugging Face model waking up (Attempt {attempt+1}/{max_retries}). Waiting 15s...")
                 if attempt < max_retries - 1:
@@ -185,8 +188,6 @@ async def add_document(lecture_id: str = Form(...), file: UploadFile = File(...)
 
         embeddings = embedding_model.encode(
             chunks,
-            batch_size=32,
-            show_progress_bar=False,
             normalize_embeddings=True
         )
 
@@ -198,12 +199,11 @@ async def add_document(lecture_id: str = Form(...), file: UploadFile = File(...)
                 )
 
                 for chunk, embedding in zip(chunks, embeddings):
-                    cur.execute(
+                   cur.execute(
                         "INSERT INTO documents (content, embedding, metadata) VALUES (%s, %s::vector, %s)",
-                        (chunk, embedding.tolist(), json.dumps({"lecture_id": lecture_id}))
+                        (chunk, str(embedding.tolist()), json.dumps({"lecture_id": lecture_id}))
                     )
                 conn.commit()
-
         return {"message": "Indexed", "chunks": len(chunks)}
 
     except Exception as e:
