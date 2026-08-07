@@ -7,3 +7,5 @@ requests
 pydantic
 python-dotenv
 numpy
+
+sentence-transformers

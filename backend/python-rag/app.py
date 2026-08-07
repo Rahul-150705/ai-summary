@@ -28,69 +28,23 @@ async def log_requests(request, call_next):
 # --- ENVIRONMENT CONFIG ---
 DB_URL = os.getenv("DB_URL")
 OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "ollama").lower()
+OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 700))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 100))
 SEARCH_LIMIT = int(os.getenv("VECTOR_SEARCH_LIMIT", 8))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", 2))
+MAX_EMBEDDING_RETRIES = int(os.getenv("EMBEDDING_MAX_RETRIES", 4))
+PYTHON_RAG_PORT = int(os.getenv("PYTHON_RAG_PORT", os.getenv("PORT", "8001")))
 
 import time
 
-# --- EMBDEDDING MODEL (Hugging Face API wrapper) ---
-class HuggingFaceEmbedding:
-    def __init__(self, token):
-        self.api_url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
-        self.headers = {"Authorization": f"Bearer {token}"}
+# --- EMBEDDING MODEL ---
+from sentence_transformers import SentenceTransformer
 
-    def _encode_batch(self, texts):
-        max_retries = 4
-        for attempt in range(max_retries):
-            response = requests.post(self.api_url, headers=self.headers, json={"inputs": texts})
-            
-            if response.status_code == 200:
-                result = np.array(response.json())
-                if result.ndim == 3:  # token-level embeddings → collapse to sentence
-                    result = result.mean(axis=1)
-                return result
-            elif response.status_code == 503 and "loading" in response.text.lower():
-                print(f"Hugging Face model waking up (Attempt {attempt+1}/{max_retries}). Waiting 15s...")
-                if attempt < max_retries - 1:
-                    time.sleep(15)
-                else:
-                    raise Exception(f"HF API Timeout: Model loading failed after retries.")
-            else:
-                raise Exception(f"Hugging Face API Error: {response.text}")
-
-    def encode(self, texts, **kwargs):
-        is_single = isinstance(texts, str)
-        if is_single:
-            texts = [texts]
-        
-        # Hugging Face Free API has payload limits. We should batch them in groups of 10.
-        batch_size = 10
-        all_embeddings = []
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i+batch_size]
-            batch_emb = self._encode_batch(batch)
-            
-            # HuggingFace sometimes strips the outer array if batch has only 1 item
-            if batch_emb.ndim == 1:
-                batch_emb = np.expand_dims(batch_emb, axis=0)
-                
-            for row in batch_emb:
-                all_embeddings.append(row)
-            
-        embeddings = np.array(all_embeddings)
-            
-        if kwargs.get("normalize_embeddings"):
-            # L2 normalization across rows
-            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-            embeddings = np.where(norms > 0, embeddings / norms, embeddings)
-            
-        return embeddings[0] if is_single else embeddings
-
-hf_token = os.getenv("HF_API_TOKEN")
-print("Loading Hugging Face API Embedding Wrapper...")
-embedding_model = HuggingFaceEmbedding(token=hf_token)
+embedding_model = SentenceTransformer(
+    "sentence-transformers/all-MiniLM-L6-v2"
+)
 
 # REMOVED RERANKER: The cross-encoder takes too much RAM and exceeds Render's 512MB limit!
 # reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
@@ -362,4 +316,5 @@ async def debug(lecture_id: str):
 # --- RUN ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    print(f"Starting Python RAG service on port {PYTHON_RAG_PORT}...")
+    uvicorn.run(app, host="0.0.0.0", port=PYTHON_RAG_PORT)
